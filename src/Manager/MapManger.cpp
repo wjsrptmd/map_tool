@@ -45,7 +45,7 @@ float requireNumber(const nlohmann::json& object, const char* key)
     return value;
 }
 
-sf::Color requireColor(const nlohmann::json& object, const char* key)
+Color requireColor(const nlohmann::json& object, const char* key)
 {
     if (!object.contains(key) || !object[key].is_array() || object[key].size() != 3)
         throw std::runtime_error(std::string(key) + " must be [r, g, b]");
@@ -106,7 +106,7 @@ void MapManger::adopt(int x, int y, MapData map)
     focus_ = {};
     refreshView();
 }
-std::optional<sf::Vector2i> MapManger::enterNeighbor(sf::Vector2i cell)
+std::optional<Cell> MapManger::enterNeighbor(Cell cell)
 {
     const bool insideX = cell.x >= 0 && cell.x < current_.width;
     const bool insideY = cell.y >= 0 && cell.y < current_.height;
@@ -144,9 +144,9 @@ std::optional<sf::Vector2i> MapManger::enterNeighbor(sf::Vector2i cell)
     map.height = loaded.height;
     map.tiles = std::move(loaded.tiles);
     adopt(nextX, nextY, std::move(map));
-    return sf::Vector2i{landX, landY};
+    return Cell{landX, landY};
 }
-void MapManger::follow(sf::Vector2i cell)
+void MapManger::follow(Cell cell)
 {
     focus_ = cell;
     refreshView();
@@ -169,7 +169,7 @@ const std::string& MapManger::tileAt(int x, int y) const noexcept
     if (y < 0 || x < 0 || y >= current_.height || x >= current_.width) return outside;
     return current_.tiles[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
 }
-bool MapManger::walkable(sf::Vector2i cell) const noexcept
+bool MapManger::walkable(Cell cell) const noexcept
 {
     const auto found = currentMap_.find(tileAt(cell.x, cell.y));
     return found != currentMap_.end() && found->second.canEnter;
@@ -179,11 +179,6 @@ const TileInfo& MapManger::tile(const std::string& id) const
     const auto found = currentMap_.find(id);
     if (found == currentMap_.end()) throw std::out_of_range("unknown tile " + id);
     return found->second;
-}
-const sf::Texture* MapManger::tileTexture(const std::string& id) const
-{
-    const auto found = currentMap_.find(id);
-    return found == currentMap_.end() ? nullptr : &found->second.texture;
 }
 void MapManger::loadTileInfo()
 {
@@ -242,8 +237,6 @@ void MapManger::loadTileInfo()
             info.name = requireText(value, id, "name");
             info.image = std::move(imagePath);
             info.canEnter = value["canEnter"].get<bool>();
-            info.texture = sf::Texture(info.image);
-            info.texture.setSmooth(true);
             currentMap_.emplace(id, std::move(info));
         }
         if (currentMap_.empty()) throw std::runtime_error("has no tiles");
@@ -253,9 +246,9 @@ void MapManger::loadTileInfo()
         throw std::runtime_error(file.generic_string() + ": " + error.what());
     }
 }
-sf::Vector2i MapManger::entryPoint() const
+Cell MapManger::entryPoint() const
 {
-    const sf::Vector2i point{2, 7};
+    const Cell point{2, 7};
     if (!walkable(point)) throw std::logic_error("Map entry point is blocked");
     return point;
 }

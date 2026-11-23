@@ -15,7 +15,7 @@ int axisFocus(int character, int mapSize, int viewSize)
 }
 }
 
-sf::Vector2i Camera::focus(const MapManger& maps, sf::Vector2i character) const
+Cell Camera::focus(const MapManger& maps, Cell character) const
 {
     return {axisFocus(character.x, maps.current().width, maps.viewColumns()),
             axisFocus(character.y, maps.current().height, maps.viewRows())};

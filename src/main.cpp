@@ -9,11 +9,34 @@
 #include <fstream>
 #include <initializer_list>
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 
 namespace
 {
+sf::Color toSf(maptool::Color color)
+{
+    return {color.r, color.g, color.b};
+}
+
+class TilePictures
+{
+public:
+    const sf::Texture* get(const maptool::MapManger& maps, const std::string& id)
+    {
+        if (id.empty()) return nullptr;
+        const auto found = loaded_.find(id);
+        if (found != loaded_.end()) return &found->second;
+        sf::Texture texture(maps.tile(id).image);
+        texture.setSmooth(true);
+        return &loaded_.try_emplace(id, std::move(texture)).first->second;
+    }
+
+private:
+    std::map<std::string, sf::Texture> loaded_;
+};
+
 void drawTile(sf::RenderTarget& out, const maptool::GlobalConfig& config, const sf::Texture* texture, sf::Vector2f position)
 {
     const float tile = config.tileSize;
@@ -21,7 +44,7 @@ void drawTile(sf::RenderTarget& out, const maptool::GlobalConfig& config, const 
     {
         sf::RectangleShape empty({tile, tile});
         empty.setPosition(position);
-        empty.setFillColor(config.emptyTile);
+        empty.setFillColor(toSf(config.emptyTile));
         out.draw(empty);
         return;
     }
@@ -32,22 +55,23 @@ void drawTile(sf::RenderTarget& out, const maptool::GlobalConfig& config, const 
     out.draw(sprite);
 }
 
-void drawMap(sf::RenderTarget& out, const maptool::MapManger& maps, const maptool::TestCharacter& character)
+void drawMap(sf::RenderTarget& out, const maptool::MapManger& maps, const maptool::TestCharacter& character, TilePictures& pictures)
 {
     const auto& config = maps.config();
     const auto& view = maps.view();
+    const sf::Vector2f margin{config.margin.x, config.margin.y};
     for (int y = 0; y < maps.viewRows(); ++y)
         for (int x = 0; x < maps.viewColumns(); ++x)
         {
             const auto& id = view.tiles[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
-            const auto position = config.margin + sf::Vector2f{x * config.tileSize, y * config.tileSize};
-            drawTile(out, config, maps.tileTexture(id), position);
+            const auto position = margin + sf::Vector2f{x * config.tileSize, y * config.tileSize};
+            drawTile(out, config, pictures.get(maps, id), position);
         }
     const auto local = character.cell() - view.origin;
     constexpr float characterRadius = 12.f;
     sf::CircleShape body(characterRadius);
     body.setOrigin({characterRadius, characterRadius});
-    body.setPosition(config.margin + sf::Vector2f{(local.x + .5f) * config.tileSize, (local.y + .5f) * config.tileSize});
+    body.setPosition(margin + sf::Vector2f{(local.x + .5f) * config.tileSize, (local.y + .5f) * config.tileSize});
     body.setFillColor({214, 176, 132});
     out.draw(body);
 }
@@ -66,7 +90,7 @@ std::string jsonText(const nlohmann::json& object, const char* key)
     return object[key].get<std::string>();
 }
 
-sf::Vector2i directionStep(sf::Keyboard::Key key)
+maptool::Cell directionStep(sf::Keyboard::Key key)
 {
     switch (key)
     {
@@ -78,9 +102,9 @@ sf::Vector2i directionStep(sf::Keyboard::Key key)
     }
 }
 
-bool moveCharacter(maptool::MapManger& maps, maptool::Camera& camera, maptool::TestCharacter& character, sf::Vector2i step)
+bool moveCharacter(maptool::MapManger& maps, maptool::Camera& camera, maptool::TestCharacter& character, maptool::Cell step)
 {
-    if (step == sf::Vector2i{}) return false;
+    if (step == maptool::Cell{}) return false;
     const auto next = character.cell() + step;
     if (maps.walkable(next))
         character.moveTo(next);
@@ -131,7 +155,7 @@ bool selfTest(maptool::MapManger& maps, const maptool::TestCharacter& character)
         || static_cast<int>(maps.view().tiles.front().size()) != maps.viewColumns())
         return false;
     requireKeys(root["viewShift"], {"x", "y"});
-    const sf::Vector2i shift{jsonInt(root["viewShift"], "x"), jsonInt(root["viewShift"], "y")};
+    const maptool::Cell shift{jsonInt(root["viewShift"], "x"), jsonInt(root["viewShift"], "y")};
     const auto origin = maps.view().origin;
     maps.follow(character.cell() + shift);
     if (maps.view().origin != origin + shift) return false;
@@ -156,6 +180,7 @@ int main(int argc, char** argv)
         maps.follow(camera.focus(maps, character.cell()));
 
         const auto& config = maps.config();
+        TilePictures pictures;
         const auto width = static_cast<unsigned>(maps.viewColumns() * config.tileSize + config.margin.x * 2);
         const auto height = static_cast<unsigned>(maps.viewRows() * config.tileSize + config.margin.y * 2);
         const std::string title = config.windowTitle + " - " + maps.projectName();
@@ -206,8 +231,8 @@ int main(int argc, char** argv)
                 moveCharacter(maps, camera, character, directionStep(directions[moving]));
                 repeat.restart();
             }
-            window.clear(config.background);
-            drawMap(window, maps, character);
+            window.clear(toSf(config.background));
+            drawMap(window, maps, character, pictures);
             window.display();
         }
     }
