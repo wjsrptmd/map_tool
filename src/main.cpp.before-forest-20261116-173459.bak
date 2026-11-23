@@ -1,0 +1,98 @@
+#include <SFML/Graphics.hpp>
+#include <optional>
+#include <string>
+
+namespace
+{
+    constexpr int Columns = 12;
+    constexpr int Rows = 8;
+    constexpr float CellSize = 64.f;
+    constexpr sf::Vector2f Origin{96.f, 96.f};
+
+    std::optional<sf::Vector2i> cellAt(sf::Vector2f point)
+    {
+        const auto local = point - Origin;
+        if (local.x < 0.f || local.y < 0.f ||
+            local.x >= Columns * CellSize || local.y >= Rows * CellSize)
+            return std::nullopt;
+        return sf::Vector2i{static_cast<int>(local.x / CellSize),
+                            static_cast<int>(local.y / CellSize)};
+    }
+
+    sf::Vector2f cellPosition(sf::Vector2i cell)
+    {
+        return Origin + sf::Vector2f{cell.x * CellSize, cell.y * CellSize};
+    }
+}
+
+int main()
+{
+    sf::RenderWindow window(sf::VideoMode({960u, 720u}),
+        "Grid sample | Left click: move | Right click: reset | Esc: quit");
+    window.setFramerateLimit(60);
+    const sf::View view(sf::FloatRect({0.f, 0.f}, {960.f, 720.f}));
+    window.setView(view);
+
+    sf::Vector2i unit{1, 1};
+    std::optional<sf::Vector2i> selected;
+    sf::RectangleShape tile({CellSize - 2.f, CellSize - 2.f});
+    sf::CircleShape marker(20.f);
+    marker.setFillColor(sf::Color{245, 190, 70});
+
+    while (window.isOpen())
+    {
+        while (const auto event = window.pollEvent())
+        {
+            if (event->is<sf::Event::Closed>())
+                window.close();
+            else if (const auto* key = event->getIf<sf::Event::KeyPressed>())
+            {
+                if (key->code == sf::Keyboard::Key::Escape)
+                    window.close();
+            }
+            else if (const auto* mouse = event->getIf<sf::Event::MouseButtonPressed>())
+            {
+                if (mouse->button == sf::Mouse::Button::Left)
+                {
+                    selected = cellAt(window.mapPixelToCoords(mouse->position));
+                    if (selected)
+                    {
+                        unit = *selected;
+                        window.setTitle("Grid sample | Cell (" + std::to_string(unit.x) +
+                            ", " + std::to_string(unit.y) + ") | Right click: reset");
+                    }
+                }
+                else if (mouse->button == sf::Mouse::Button::Right)
+                {
+                    unit = {1, 1};
+                    selected.reset();
+                    window.setTitle("Grid sample | Left click: move | Right click: reset | Esc: quit");
+                }
+            }
+        }
+        if (!window.isOpen())
+            break;
+
+        const auto hovered = cellAt(window.mapPixelToCoords(sf::Mouse::getPosition(window)));
+        window.clear(sf::Color{24, 28, 36});
+        for (int y = 0; y < Rows; ++y)
+        {
+            for (int x = 0; x < Columns; ++x)
+            {
+                const sf::Vector2i cell{x, y};
+                sf::Color color = ((x + y) % 2 == 0)
+                    ? sf::Color{60, 76, 88} : sf::Color{52, 66, 78};
+                if (selected && *selected == cell)
+                    color = sf::Color{55, 120, 100};
+                if (hovered && *hovered == cell)
+                    color = sf::Color{85, 125, 155};
+                tile.setPosition(cellPosition(cell));
+                tile.setFillColor(color);
+                window.draw(tile);
+            }
+        }
+        marker.setPosition(cellPosition(unit) + sf::Vector2f{11.f, 11.f});
+        window.draw(marker);
+        window.display();
+    }
+}
