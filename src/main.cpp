@@ -4,6 +4,7 @@
 #include "Manager/MapManger.hpp"
 #include <nlohmann/json.hpp>
 #include <SFML/Graphics.hpp>
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -63,6 +64,32 @@ std::string jsonText(const nlohmann::json& object, const char* key)
     if (!object.contains(key) || !object[key].is_string() || object[key].get<std::string>().empty())
         throw std::runtime_error(std::string(key) + " must be text");
     return object[key].get<std::string>();
+}
+
+sf::Vector2i directionStep(sf::Keyboard::Key key)
+{
+    switch (key)
+    {
+    case sf::Keyboard::Key::Up: return {0, -1};
+    case sf::Keyboard::Key::Down: return {0, 1};
+    case sf::Keyboard::Key::Left: return {-1, 0};
+    case sf::Keyboard::Key::Right: return {1, 0};
+    default: return {};
+    }
+}
+
+bool moveCharacter(maptool::MapManger& maps, maptool::Camera& camera, maptool::TestCharacter& character, sf::Vector2i step)
+{
+    if (step == sf::Vector2i{}) return false;
+    const auto next = character.cell() + step;
+    if (maps.walkable(next))
+        character.moveTo(next);
+    else if (const auto arrived = maps.enterNeighbor(next))
+        character.moveTo(*arrived);
+    else
+        return false;
+    maps.follow(camera.focus(maps, character.cell()));
+    return true;
 }
 
 void requireKeys(const nlohmann::json& object, std::initializer_list<const char*> keys)
@@ -134,31 +161,50 @@ int main(int argc, char** argv)
         const std::string title = config.windowTitle + " - " + maps.projectName();
         sf::RenderWindow window(sf::VideoMode({width, height}), sf::String::fromUtf8(title.begin(), title.end()));
         window.setFramerateLimit(static_cast<unsigned>(config.framerate));
+        constexpr sf::Keyboard::Key directions[] = {
+            sf::Keyboard::Key::Up, sf::Keyboard::Key::Down, sf::Keyboard::Key::Left, sf::Keyboard::Key::Right};
+        std::array<bool, 4> held{};
+        int moving = -1;
+        sf::Clock repeat;
+        const sf::Time repeatInterval = sf::milliseconds(110);
         while (window.isOpen())
         {
             while (const auto event = window.pollEvent())
             {
                 if (event->is<sf::Event::Closed>()) window.close();
+                else if (event->is<sf::Event::FocusLost>())
+                {
+                    held.fill(false);
+                    moving = -1;
+                }
                 else if (const auto* key = event->getIf<sf::Event::KeyPressed>())
                 {
-                    sf::Vector2i step;
-                    switch (key->code)
+                    for (int i = 0; i < 4; ++i)
                     {
-                    case sf::Keyboard::Key::Up: step = {0, -1}; break;
-                    case sf::Keyboard::Key::Down: step = {0, 1}; break;
-                    case sf::Keyboard::Key::Left: step = {-1, 0}; break;
-                    case sf::Keyboard::Key::Right: step = {1, 0}; break;
-                    default: continue;
+                        if (key->code != directions[i] || held[static_cast<std::size_t>(i)]) continue;
+                        held[static_cast<std::size_t>(i)] = true;
+                        moving = i;
+                        moveCharacter(maps, camera, character, directionStep(key->code));
+                        repeat.restart();
                     }
-                    const auto next = character.cell() + step;
-                    if (maps.walkable(next))
-                        character.moveTo(next);
-                    else if (const auto arrived = maps.enterNeighbor(next))
-                        character.moveTo(*arrived);
-                    else
-                        continue;
-                    maps.follow(camera.focus(maps, character.cell()));
                 }
+                else if (const auto* key = event->getIf<sf::Event::KeyReleased>())
+                {
+                    for (int i = 0; i < 4; ++i)
+                        if (key->code == directions[i]) held[static_cast<std::size_t>(i)] = false;
+                    if (moving >= 0 && !held[static_cast<std::size_t>(moving)])
+                    {
+                        moving = -1;
+                        for (int i = 0; i < 4; ++i)
+                            if (held[static_cast<std::size_t>(i)]) moving = i;
+                        repeat.restart();
+                    }
+                }
+            }
+            if (moving >= 0 && repeat.getElapsedTime() >= repeatInterval)
+            {
+                moveCharacter(maps, camera, character, directionStep(directions[moving]));
+                repeat.restart();
             }
             window.clear(config.background);
             drawMap(window, maps, character);
