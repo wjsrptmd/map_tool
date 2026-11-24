@@ -1,5 +1,5 @@
 {
   "project": "sample",
   "viewShift": { "x": 4, "y": 1 },
-  "startMap": { "x": 0, "y": 0 }
+  "startMap": { "chapter": 1, "x": 0, "y": 0 }
 }

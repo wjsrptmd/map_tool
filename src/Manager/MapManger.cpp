@@ -1,10 +1,12 @@
 ﻿#include "MapManger.hpp"
 #include "MapFile.hpp"
 #include <nlohmann/json.hpp>
+#include <chrono>
 #include <cstdint>
 #include <fstream>
 #include <stdexcept>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 namespace maptool
@@ -60,19 +62,46 @@ Color requireColor(const nlohmann::json& object, const char* key)
     }
     return {channels[0], channels[1], channels[2]};
 }
+
+std::optional<Cell> landingCell(Cell cell, int currentWidth, int currentHeight, int nextWidth, int nextHeight)
+{
+    int landX = cell.x;
+    int landY = cell.y;
+    if (cell.x < 0) landX = nextWidth - 1;
+    else if (cell.x >= currentWidth) landX = 0;
+    if (cell.y < 0) landY = nextHeight - 1;
+    else if (cell.y >= currentHeight) landY = 0;
+    if (landX < 0 || landY < 0 || landX >= nextWidth || landY >= nextHeight) return std::nullopt;
+    return Cell{landX, landY};
+}
 }
 
-MapManger::MapManger() : mapDir_(projectDirectory())
+MapManger::MapManger()
 {
-    projectName_ = mapDir_.filename().string();
+    const auto project = projectDirectory();
+    projectName_ = project.filename().string();
+    mapDir_ = project / "maps";
+    std::error_code error;
+    if (!std::filesystem::is_directory(mapDir_, error))
+        throw std::runtime_error("maps not found: " + mapDir_.generic_string());
     loadTileInfo();
-    const auto worldFiles = worldMapFiles(mapDir_ / "world");
+}
+void MapManger::loadChapter(int chapter)
+{
+    if (chapter <= 0) throw std::invalid_argument("chapter must be positive");
+    if (pending_.valid()) throw std::runtime_error("cannot load a chapter while a map is loading");
+    const auto dir = mapDir_ / "world" / ("chapter" + std::to_string(chapter));
+    std::error_code error;
+    if (!std::filesystem::is_directory(dir, error))
+        throw std::runtime_error("chapter not found: " + dir.generic_string());
+    const auto worldFiles = worldMapFiles(dir);
     for (const auto& file : worldFiles)
     {
         auto map = loadMapFile(file.path);
         if (map.kind != "world") throw std::runtime_error(file.path.filename().string() + " is not a world map");
         requireKnownTiles(currentMap_, map, file.path);
     }
+    chapter_ = chapter;
     setCurrentMap(worldFiles.front().x, worldFiles.front().y);
 }
 bool MapManger::worldFileExists(int x, int y) const noexcept
@@ -82,11 +111,10 @@ bool MapManger::worldFileExists(int x, int y) const noexcept
 }
 std::filesystem::path MapManger::worldFilePath(int x, int y) const
 {
-    return mapDir_ / "world" / (std::to_string(y) + "_" + std::to_string(x) + ".map");
+    return mapDir_ / "world" / ("chapter" + std::to_string(chapter_)) / (std::to_string(y) + "_" + std::to_string(x) + ".map");
 }
-void MapManger::setCurrentMap(int x, int y)
+MapData MapManger::loadWorld(int x, int y) const
 {
-    if (!worldFileExists(x, y)) throw std::out_of_range("World map does not exist");
     const auto path = worldFilePath(x, y);
     auto loaded = loadMapFile(path);
     if (loaded.kind != "world") throw std::runtime_error(path.filename().string() + " is not a world map");
@@ -96,24 +124,74 @@ void MapManger::setCurrentMap(int x, int y)
     map.width = loaded.width;
     map.height = loaded.height;
     map.tiles = std::move(loaded.tiles);
-    adopt(x, y, std::move(map));
+    return map;
+}
+void MapManger::preloadNeighbors(int x, int y)
+{
+    const int steps[4][2] = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    for (const auto& step : steps)
+    {
+        const int nextX = x + step[0];
+        const int nextY = y + step[1];
+        const MapCoord key{nextX, nextY};
+        if (loaded_.contains(key) || !worldFileExists(nextX, nextY)) continue;
+        loaded_.emplace(key, loadWorld(nextX, nextY));
+    }
+}
+void MapManger::setCurrentMap(int x, int y)
+{
+    if (!worldFileExists(x, y)) throw std::out_of_range("World map does not exist");
+    const MapCoord key{x, y};
+    if (const auto found = loaded_.find(key); found != loaded_.end())
+        adopt(x, y, found->second);
+    else
+        adopt(x, y, loadWorld(x, y));
 }
 void MapManger::adopt(int x, int y, MapData map)
 {
+    loaded_.insert_or_assign(MapCoord{x, y}, map);
     current_ = std::move(map);
     currentX_ = x;
     currentY_ = y;
     focus_ = {};
     refreshView();
+    preloadNeighbors(x, y);
 }
-std::optional<Cell> MapManger::enterNeighbor(Cell cell)
+bool MapManger::loading() const noexcept
 {
+    return pending_.valid();
+}
+std::optional<MapManger::PendingMap> MapManger::readNeighbor(std::filesystem::path path, std::map<std::string, bool> canEnter,
+    int currentWidth, int currentHeight, Cell cell, int nextX, int nextY)
+{
+    auto loaded = loadMapFile(path);
+    if (loaded.kind != "world") throw std::runtime_error(path.filename().string() + " is not a world map");
+    for (const auto& row : loaded.tiles)
+        for (const auto& id : row)
+            if (!canEnter.contains(id))
+                throw std::runtime_error(path.filename().string() + " has unknown tile " + id);
+    const auto landing = landingCell(cell, currentWidth, currentHeight, loaded.width, loaded.height);
+    if (!landing) return std::nullopt;
+    const auto found = canEnter.find(loaded.tiles[static_cast<std::size_t>(landing->y)][static_cast<std::size_t>(landing->x)]);
+    if (found == canEnter.end() || !found->second) return std::nullopt;
+
+    PendingMap pending;
+    pending.x = nextX;
+    pending.y = nextY;
+    pending.landing = *landing;
+    pending.map.name = std::move(loaded.name);
+    pending.map.width = loaded.width;
+    pending.map.height = loaded.height;
+    pending.map.tiles = std::move(loaded.tiles);
+    return pending;
+}
+bool MapManger::beginNeighbor(Cell cell)
+{
+    if (pending_.valid()) return false;
     const bool insideX = cell.x >= 0 && cell.x < current_.width;
     const bool insideY = cell.y >= 0 && cell.y < current_.height;
     int nextX = currentX_;
     int nextY = currentY_;
-    int landX = cell.x;
-    int landY = cell.y;
     if (insideX && cell.y < 0)
         --nextY;
     else if (insideX && cell.y >= current_.height)
@@ -123,28 +201,48 @@ std::optional<Cell> MapManger::enterNeighbor(Cell cell)
     else if (insideY && cell.x >= current_.width)
         ++nextX;
     else
-        return std::nullopt;
-    if (!worldFileExists(nextX, nextY)) return std::nullopt;
+        return false;
+    if (!worldFileExists(nextX, nextY)) return false;
 
+    if (const auto found = loaded_.find(MapCoord{nextX, nextY}); found != loaded_.end())
+    {
+        const auto landing = landingCell(cell, current_.width, current_.height, found->second.width, found->second.height);
+        if (!landing) return false;
+        const auto& id = found->second.tiles[static_cast<std::size_t>(landing->y)][static_cast<std::size_t>(landing->x)];
+        const auto info = currentMap_.find(id);
+        if (info == currentMap_.end() || !info->second.canEnter) return false;
+        PendingMap ready;
+        ready.x = nextX;
+        ready.y = nextY;
+        ready.landing = *landing;
+        ready.map = found->second;
+        std::promise<std::optional<PendingMap>> promise;
+        auto future = promise.get_future();
+        promise.set_value(std::move(ready));
+        pending_ = std::move(future);
+        return true;
+    }
+
+    std::map<std::string, bool> canEnter;
+    for (const auto& [id, info] : currentMap_)
+        canEnter.emplace(id, info.canEnter);
     const auto path = worldFilePath(nextX, nextY);
-    auto loaded = loadMapFile(path);
-    if (loaded.kind != "world") throw std::runtime_error(path.filename().string() + " is not a world map");
-    requireKnownTiles(currentMap_, loaded, path);
-    if (cell.x < 0) landX = loaded.width - 1;
-    else if (cell.x >= current_.width) landX = 0;
-    if (cell.y < 0) landY = loaded.height - 1;
-    else if (cell.y >= current_.height) landY = 0;
-    if (landX < 0 || landY < 0 || landX >= loaded.width || landY >= loaded.height) return std::nullopt;
-    const auto found = currentMap_.find(loaded.tiles[static_cast<std::size_t>(landY)][static_cast<std::size_t>(landX)]);
-    if (found == currentMap_.end() || !found->second.canEnter) return std::nullopt;
-
-    MapData map;
-    map.name = std::move(loaded.name);
-    map.width = loaded.width;
-    map.height = loaded.height;
-    map.tiles = std::move(loaded.tiles);
-    adopt(nextX, nextY, std::move(map));
-    return Cell{landX, landY};
+    const int width = current_.width;
+    const int height = current_.height;
+    pending_ = std::async(std::launch::async, [path, canEnter, width, height, cell, nextX, nextY] {
+        return readNeighbor(path, canEnter, width, height, cell, nextX, nextY);
+    });
+    return true;
+}
+std::optional<Cell> MapManger::pollNeighbor()
+{
+    if (!pending_.valid()) return std::nullopt;
+    if (pending_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return std::nullopt;
+    auto loaded = pending_.get();
+    if (!loaded) return std::nullopt;
+    const Cell landing = loaded->landing;
+    adopt(loaded->x, loaded->y, std::move(loaded->map));
+    return landing;
 }
 void MapManger::follow(Cell cell)
 {

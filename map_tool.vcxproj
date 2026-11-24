@@ -149,6 +149,8 @@
     </ItemGroup>
   <ItemGroup>
     <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="src\Game.cpp" />
+    <ClInclude Include="src\Game.hpp" />
     <ClCompile Include="src\Camera.cpp" />
     <ClInclude Include="src\Camera.hpp" />
     <ClCompile Include="src\TestCharacter.cpp" />

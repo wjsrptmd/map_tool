@@ -3,5 +3,5 @@
 
 namespace maptool
 {
-TestCharacter::TestCharacter(const MapManger& maps) : cell_(maps.entryPoint()) {}
+	TestCharacter::TestCharacter(const MapManger& maps) : cell_(maps.entryPoint()) {}
 }

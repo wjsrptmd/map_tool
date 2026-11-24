@@ -1,6 +1,7 @@
 ﻿#pragma once
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <optional>
 #include <string>
@@ -71,7 +72,7 @@ struct ViewMap
     std::vector<std::vector<std::string>> tiles;
 };
 
-// Owns the selected project's tile info and the current world map.
+// Owns the selected project's tile info, the current world map, and the adjacent maps kept ready for travel.
 class MapManger
 {
 public:
@@ -88,19 +89,46 @@ public:
     const std::string& projectName() const noexcept { return projectName_; }
     const TileInfo& tile(const std::string& id) const;
     Cell entryPoint() const;
+    void loadChapter(int chapter);
     void setCurrentMap(int x, int y);
     void follow(Cell cell);
     const MapData& current() const noexcept { return current_; }
     const ViewMap& view() const noexcept { return view_; }
+    int currentChapter() const noexcept { return chapter_; }
     int currentMapX() const noexcept { return currentX_; }
     int currentMapY() const noexcept { return currentY_; }
     const std::string& tileAt(int x, int y) const noexcept;
     bool walkable(Cell cell) const noexcept;
-    std::optional<Cell> enterNeighbor(Cell cell);
+    bool loading() const noexcept;
+    bool beginNeighbor(Cell cell);
+    std::optional<Cell> pollNeighbor();
 
 private:
+    struct PendingMap
+    {
+        int x = 0;
+        int y = 0;
+        Cell landing;
+        MapData map;
+    };
+
+    struct MapCoord
+    {
+        int x = 0;
+        int y = 0;
+
+        friend bool operator<(MapCoord left, MapCoord right) noexcept
+        {
+            return left.y < right.y || (left.y == right.y && left.x < right.x);
+        }
+    };
+
+    static std::optional<PendingMap> readNeighbor(std::filesystem::path path, std::map<std::string, bool> canEnter,
+        int currentWidth, int currentHeight, Cell cell, int nextX, int nextY);
     bool worldFileExists(int x, int y) const noexcept;
     std::filesystem::path worldFilePath(int x, int y) const;
+    MapData loadWorld(int x, int y) const;
+    void preloadNeighbors(int x, int y);
     void loadTileInfo();
     void refreshView();
     void adopt(int x, int y, MapData map);
@@ -112,6 +140,9 @@ private:
     Cell focus_;
     std::map<std::string, TileInfo> currentMap_;
     GlobalConfig config_;
+    int chapter_ = 0;
     int currentX_ = 0, currentY_ = 0;
+    std::map<MapCoord, MapData> loaded_;
+    std::future<std::optional<PendingMap>> pending_;
 };
 }
