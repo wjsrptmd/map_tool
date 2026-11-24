@@ -88,7 +88,6 @@ public:
     int viewRows() const noexcept { return config_.viewRows; }
     const std::string& projectName() const noexcept { return projectName_; }
     const TileInfo& tile(const std::string& id) const;
-    Cell entryPoint() const;
     void loadChapter(int chapter);
     void setCurrentMap(int x, int y);
     void follow(Cell cell);

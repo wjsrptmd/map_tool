@@ -153,13 +153,17 @@
     <ClInclude Include="src\Game.hpp" />
     <ClCompile Include="src\Camera.cpp" />
     <ClInclude Include="src\Camera.hpp" />
-    <ClCompile Include="src\TestCharacter.cpp" />
-    <ClInclude Include="src\TestCharacter.hpp" />
+    <ClCompile Include="src\model\Character.cpp" />
+    <ClInclude Include="src\model\Character.hpp" />
+    <ClCompile Include="src\service\CharacterService.cpp" />
+    <ClInclude Include="src\service\CharacterService.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\Manager\MapFile.cpp" />
-    <ClInclude Include="src\Manager\MapFile.hpp" />
-    <ClCompile Include="src\Manager\MapManger.cpp" />
-    <ClInclude Include="src\Manager\MapManger.hpp" />
+    <ClCompile Include="src\model\MapFile.cpp" />
+    <ClInclude Include="src\model\MapFile.hpp" />
+    <ClCompile Include="src\manager\MapManger.cpp" />
+    <ClInclude Include="src\manager\MapManger.hpp" />
+    <ClCompile Include="src\manager\CharacterManager.cpp" />
+    <ClInclude Include="src\manager\CharacterManager.hpp" />
   </ItemGroup>
 </Project>

@@ -1,5 +1,5 @@
 ﻿#include "MapManger.hpp"
-#include "MapFile.hpp"
+#include "../model/MapFile.hpp"
 #include <nlohmann/json.hpp>
 #include <chrono>
 #include <cstdint>
@@ -343,11 +343,5 @@ void MapManger::loadTileInfo()
     {
         throw std::runtime_error(file.generic_string() + ": " + error.what());
     }
-}
-Cell MapManger::entryPoint() const
-{
-    const Cell point{2, 7};
-    if (!walkable(point)) throw std::logic_error("Map entry point is blocked");
-    return point;
 }
 }

@@ -1,5 +1,4 @@
 #include "MapFile.hpp"
-#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <fstream>
 #include <stdexcept>
@@ -35,15 +34,6 @@ namespace maptool
 			return true;
 		}
 
-		bool validProjectName(const std::string& name)
-		{
-			if (name.empty()) return false;
-			for (const unsigned char c : name)
-				if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-'))
-					return false;
-			return true;
-		}
-
 		std::filesystem::path repositoryRoot()
 		{
 			auto dir = std::filesystem::current_path();
@@ -58,35 +48,13 @@ namespace maptool
 			throw std::runtime_error("config/start_config.json not found from " + start.generic_string());
 		}
 
-		std::string selectedProject(const std::filesystem::path& file)
-		{
-			std::ifstream in(file);
-			if (!in) throw std::runtime_error("failed to open " + file.generic_string());
-			const auto root = nlohmann::json::parse(in);
-			if (!root.is_object()) throw std::runtime_error("needs an object");
-			for (const auto& item : root.items())
-				if (item.key() != "project") throw std::runtime_error("unknown key " + item.key());
-			if (!root.contains("project") || !root["project"].is_string())
-				throw std::runtime_error("needs a project folder name");
-			const auto project = root["project"].get<std::string>();
-			if (!validProjectName(project)) throw std::runtime_error("needs a project folder name");
-			return project;
-		}
 	}
 
 	std::filesystem::path projectDirectory()
 	{
-		const auto root = repositoryRoot();
-		const auto config = root / "config" / "start_config.json";
-		std::string name;
-		try { name = selectedProject(config); }
-		catch (const std::exception& error)
-		{
-			throw std::runtime_error(config.generic_string() + ": " + error.what());
-		}
-		const auto dir = root / "projects" / name;
+		const auto dir = repositoryRoot() / "resources";
 		if (!std::filesystem::is_directory(dir))
-			throw std::runtime_error("project not found: " + dir.generic_string());
+			throw std::runtime_error("resources not found: " + dir.generic_string());
 		return dir;
 	}
 

@@ -1,29 +1,29 @@
 #pragma once
 #include "Camera.hpp"
-#include "TestCharacter.hpp"
-#include "Manager/MapManger.hpp"
+#include "service/CharacterService.hpp"
+#include "manager/MapManger.hpp"
 #include <SFML/Graphics.hpp>
 #include <map>
-#include <memory>
 #include <string>
 
 namespace maptool
 {
-// Values read from src/self_test.json and src/game_config.json.
+// Values read from src/game_config.json.
 struct GameSettings
 {
     std::string project;
     Cell viewShift;
     int chapter = 1;
     Cell startMap;
-    float characterRadiusScale = 0.f;
-    Color characterColor;
+    std::string characterId;
+    int moveInterval = 0;
 };
 
 // Window, input, and drawing. Map data stays in MapManger.
 class Game
 {
 public:
+    Game();
     int run(const GameSettings& settings, bool selfTest);
 
 private:
@@ -38,17 +38,21 @@ private:
 
     static sf::Color toSf(Color color);
     static Cell directionStep(sf::Keyboard::Key key);
+    const sf::Texture& spriteTexture(const Animation& animation);
     void drawTile(sf::RenderTarget& out, const sf::Texture* texture, sf::Vector2f position) const;
-    void drawMap(sf::RenderTarget& out, const GameSettings& settings);
+    void drawGame(sf::RenderTarget& out);
     void drawLoading(sf::RenderTarget& out) const;
-    bool moveCharacter(Cell step);
-    void openChapter(int chapter);
+    void moveCharacter(Cell step);
+    void openChapter(const GameSettings& settings);
+    bool checkPlacements(const GameSettings& settings);
     bool selfTest(const GameSettings& settings);
     int play(const GameSettings& settings);
 
     MapManger maps_;
-    std::unique_ptr<TestCharacter> character_;
+    CharacterManager characters_;
+    CharacterService service_;
     Camera camera_;
     TilePictures pictures_;
+    std::map<std::string, sf::Texture> sprites_;
 };
 }

@@ -1,9 +1,9 @@
 #pragma once
-#include "Manager/MapManger.hpp"
+#include "manager/MapManger.hpp"
 
 namespace maptool
 {
-// Chooses the view focus. The character cell itself stays with TestCharacter.
+// Chooses the view focus from a character cell supplied by the caller.
 class Camera
 {
 public:

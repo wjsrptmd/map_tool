@@ -1,5 +1,5 @@
 #include "Camera.hpp"
-#include "Manager/MapManger.hpp"
+#include "manager/MapManger.hpp"
 #include <algorithm>
 
 namespace maptool

@@ -30,24 +30,36 @@
     <ClInclude Include="src\Camera.hpp">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClCompile Include="src\TestCharacter.cpp">
+    <ClCompile Include="src\model\Character.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClInclude Include="src\TestCharacter.hpp">
+    <ClInclude Include="src\model\Character.hpp">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClCompile Include="src\service\CharacterService.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClInclude Include="src\service\CharacterService.hpp">
       <Filter>헤더 파일</Filter>
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="src\Manager\MapFile.cpp">
+    <ClCompile Include="src\model\MapFile.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClInclude Include="src\Manager\MapFile.hpp">
+    <ClInclude Include="src\model\MapFile.hpp">
       <Filter>헤더 파일</Filter>
     </ClInclude>
-    <ClCompile Include="src\Manager\MapManger.cpp">
+    <ClCompile Include="src\manager\MapManger.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>
-    <ClInclude Include="src\Manager\MapManger.hpp">
+    <ClInclude Include="src\manager\MapManger.hpp">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
+    <ClCompile Include="src\manager\CharacterManager.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClInclude Include="src\manager\CharacterManager.hpp">
       <Filter>헤더 파일</Filter>
     </ClInclude>
   </ItemGroup>

@@ -1,7 +1,6 @@
 ﻿#include "Game.hpp"
-#include "Manager/MapFile.hpp"
+#include "model/MapFile.hpp"
 #include <nlohmann/json.hpp>
-#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <initializer_list>
@@ -25,31 +24,6 @@ namespace
 		return object[key].get<std::string>();
 	}
 
-	float jsonPositive(const nlohmann::json& object, const char* key)
-	{
-		if (!object.contains(key) || !object[key].is_number())
-			throw std::runtime_error(std::string(key) + " must be a number");
-		const float value = object[key].get<float>();
-		if (value <= 0.f) throw std::runtime_error(std::string(key) + " must be positive");
-		return value;
-	}
-
-	maptool::Color jsonColor(const nlohmann::json& object, const char* key)
-	{
-		if (!object.contains(key) || !object[key].is_array() || object[key].size() != 3)
-			throw std::runtime_error(std::string(key) + " must be [r, g, b]");
-		std::uint8_t channels[3] = {};
-		for (std::size_t i = 0; i < 3; ++i)
-		{
-			const auto& channel = object[key][i];
-			if (!channel.is_number_integer()) throw std::runtime_error(std::string(key) + " channels must be integers");
-			const int value = channel.get<int>();
-			if (value < 0 || value > 255) throw std::runtime_error(std::string(key) + " channels must be 0 to 255");
-			channels[i] = static_cast<std::uint8_t>(value);
-		}
-		return { channels[0], channels[1], channels[2] };
-	}
-
 	void requireKeys(const nlohmann::json& object, std::initializer_list<const char*> keys)
 	{
 		if (!object.is_object()) throw std::runtime_error("needs an object");
@@ -68,9 +42,9 @@ namespace
 	{
 		for (auto dir = maptool::projectDirectory();; dir = dir.parent_path())
 		{
-			const auto candidate = dir / "src" / "self_test.json";
+			const auto candidate = dir / "src" / "game_config.json";
 			if (std::filesystem::is_regular_file(candidate)) return candidate.parent_path();
-			if (dir.parent_path() == dir) throw std::runtime_error("src/self_test.json not found");
+			if (dir.parent_path() == dir) throw std::runtime_error("src/game_config.json not found");
 		}
 	}
 
@@ -83,21 +57,19 @@ namespace
 
 	maptool::GameSettings readSettings()
 	{
-		const auto src = sourceDirectory();
-		const auto root = loadJson(src / "self_test.json");
-		const auto game = loadJson(src / "game_config.json");
-		requireKeys(root, { "project", "viewShift", "startMap" });
+		const auto root = loadJson(sourceDirectory() / "game_config.json");
+		requireKeys(root, { "project", "viewShift", "startMap", "character" });
 		requireKeys(root["viewShift"], { "x", "y" });
 		requireKeys(root["startMap"], { "chapter", "x", "y" });
-		requireKeys(game, { "character" });
-		requireKeys(game["character"], { "radiusScale", "color" });
+		requireKeys(root["character"], { "id", "moveInterval" });
 		maptool::GameSettings settings;
 		settings.project = jsonText(root, "project");
 		settings.viewShift = { jsonInt(root["viewShift"], "x"), jsonInt(root["viewShift"], "y") };
 		settings.chapter = jsonInt(root["startMap"], "chapter");
 		settings.startMap = { jsonInt(root["startMap"], "x"), jsonInt(root["startMap"], "y") };
-		settings.characterRadiusScale = jsonPositive(game["character"], "radiusScale");
-		settings.characterColor = jsonColor(game["character"], "color");
+		settings.characterId = jsonText(root["character"], "id");
+		settings.moveInterval = jsonInt(root["character"], "moveInterval");
+		if (settings.moveInterval <= 0) throw std::runtime_error("moveInterval must be positive");
 		return settings;
 	}
 }
