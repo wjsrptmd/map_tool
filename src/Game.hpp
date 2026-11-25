@@ -12,6 +12,7 @@ namespace maptool
 struct GameSettings
 {
     std::string project;
+    bool debugMode = false;
     Cell viewShift;
     int chapter = 1;
     Cell startMap;
@@ -45,6 +46,7 @@ private:
     void moveCharacter(Cell step);
     void openChapter(const GameSettings& settings);
     bool checkPlacements(const GameSettings& settings);
+    bool checkNpcMovement();
     bool selfTest(const GameSettings& settings);
     int play(const GameSettings& settings);
 

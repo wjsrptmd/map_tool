@@ -30,6 +30,12 @@
     <ClInclude Include="src\Camera.hpp">
       <Filter>헤더 파일</Filter>
     </ClInclude>
+    <ClCompile Include="src\util\Log.cpp">
+      <Filter>소스 파일</Filter>
+    </ClCompile>
+    <ClInclude Include="src\util\Log.hpp">
+      <Filter>헤더 파일</Filter>
+    </ClInclude>
     <ClCompile Include="src\model\Character.cpp">
       <Filter>소스 파일</Filter>
     </ClCompile>

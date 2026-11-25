@@ -2,6 +2,7 @@
 #include "../model/MapFile.hpp"
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <initializer_list>
 #include <stdexcept>
@@ -64,6 +65,74 @@ bool requireBool(const nlohmann::json& object, const char* key)
     return object[key].get<bool>();
 }
 
+int stepDistance(MovementStep left, MovementStep right)
+{
+    return std::abs(left.x - right.x) + std::abs(left.y - right.y);
+}
+
+MovementStep readStep(const nlohmann::json& value, const std::string& where)
+{
+    if (!value.is_object()) throw std::runtime_error(where + " needs an object");
+    for (const auto& item : value.items())
+        if (item.key() != "x" && item.key() != "y")
+            throw std::runtime_error(where + " has unknown key " + item.key());
+    if (!value.contains("x") || !value["x"].is_number_integer())
+        throw std::runtime_error(where + ".x must be an integer");
+    if (!value.contains("y") || !value["y"].is_number_integer())
+        throw std::runtime_error(where + ".y must be an integer");
+    return {value["x"].get<int>(), value["y"].get<int>()};
+}
+
+MovementDefinition readMove(const nlohmann::json& move)
+{
+    if (!move.is_object()) throw std::runtime_error("move needs an object");
+    const bool hasRoute = move.contains("route");
+    const bool hasRadius = move.contains("radius");
+    if (hasRoute && hasRadius) throw std::runtime_error("move route and radius are both set");
+    if (!hasRoute && !hasRadius) throw std::runtime_error("move route or radius is required");
+    for (const auto& item : move.items())
+    {
+        const auto& key = item.key();
+        const bool routeKey = key == "speed" || key == "route" || key == "loop";
+        const bool radiusKey = key == "speed" || key == "radius";
+        if ((hasRoute && !routeKey) || (hasRadius && !radiusKey))
+            throw std::runtime_error("move has unknown key " + key);
+    }
+    if (!move.contains("speed") || !move["speed"].is_number())
+        throw std::runtime_error("move.speed must be a positive number");
+    const float speed = move["speed"].get<float>();
+    if (!(speed > 0.f)) throw std::runtime_error("move.speed must be a positive number");
+
+    MovementDefinition result;
+    result.speed = speed;
+    if (hasRadius)
+    {
+        if (!move["radius"].is_number_integer()) throw std::runtime_error("move.radius must be an integer");
+        const int radius = move["radius"].get<int>();
+        if (radius < 0) throw std::runtime_error("move.radius is out of range");
+        result.radius = radius;
+        return result;
+    }
+    if (!move.contains("loop") || !move["loop"].is_boolean())
+        throw std::runtime_error("move.loop must be a boolean");
+    result.loop = move["loop"].get<bool>();
+    if (!move["route"].is_array()) throw std::runtime_error("move.route must be an array");
+    if (move["route"].size() < 2) throw std::runtime_error("move.route needs at least two points");
+    for (std::size_t index = 0; index < move["route"].size(); ++index)
+    {
+        const auto where = "move.route[" + std::to_string(index) + "]";
+        const MovementStep step = readStep(move["route"][index], where);
+        if (index == 0 && (step.x != 0 || step.y != 0))
+            throw std::runtime_error(where + " must be the origin");
+        if (index > 0 && stepDistance(result.route[index - 1], step) != 1)
+            throw std::runtime_error(where + " is not adjacent");
+        result.route.push_back(step);
+    }
+    if (result.loop && stepDistance(result.route.back(), result.route.front()) != 1)
+        throw std::runtime_error("move.route is not a loop");
+    return result;
+}
+
 std::filesystem::path fileInside(const std::filesystem::path& root, const std::filesystem::path& base, const std::string& text)
 {
     const std::filesystem::path relative(text);
@@ -115,6 +184,28 @@ const Character& CharacterManager::character(const std::string& id)
     const auto entry = index_.find(id);
     if (entry == index_.end()) throw std::out_of_range("unknown character " + id);
     return loaded_.emplace(id, readCharacter(id, entry->second)).first->second;
+}
+
+const MovementDefinition* CharacterManager::movement(const std::string& id)
+{
+    const auto& definition = character(id).movement;
+    if (!definition) return nullptr;
+    return &(*definition);
+}
+
+void CharacterManager::checkMovement(const std::string& text, const std::string& label) const
+{
+    try
+    {
+        readMove(nlohmann::json::parse(text));
+    }
+    catch (const std::exception& error)
+    {
+        const std::string message = error.what();
+        const auto prefix = label + ": ";
+        if (message.starts_with(prefix)) throw;
+        throw std::runtime_error(prefix + message);
+    }
 }
 
 int CharacterManager::appear(const std::string& id, int x, int y, const ActorSpawn& spawn)
@@ -241,7 +332,16 @@ Character CharacterManager::readCharacter(const std::string& id, const Entry& en
         std::ifstream in(file);
         if (!in) throw std::runtime_error("failed to open " + file.generic_string());
         const auto root = nlohmann::json::parse(in);
-        requireFields(root, {"id", "name", "defaultState", "defaultDirection", "anchor", "collisionRadius", "animations"});
+        if (!root.is_object()) throw std::runtime_error("needs an object");
+        for (const auto& item : root.items())
+        {
+            const auto& key = item.key();
+            if (key != "id" && key != "name" && key != "defaultState" && key != "defaultDirection"
+                && key != "anchor" && key != "collisionRadius" && key != "animations" && key != "move")
+                throw std::runtime_error("unknown key " + key);
+        }
+        for (const char* key : {"id", "name", "defaultState", "defaultDirection", "anchor", "collisionRadius", "animations"})
+            if (!root.contains(key)) throw std::runtime_error(std::string(key) + " is required");
         Character character;
         character.id = requireText(root, "id");
         character.name = requireText(root, "name");
@@ -275,6 +375,7 @@ Character CharacterManager::readCharacter(const std::string& id, const Entry& en
             }
         }
         character.animation(character.defaultState, character.defaultDirection);
+        if (root.contains("move")) character.movement = readMove(root["move"]);
         return character;
     }
     catch (const std::exception& error)

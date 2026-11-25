@@ -7,6 +7,9 @@
 *.VC.db
 *.VC.VC.opendb
 
+# Runtime logs
+logs/
+
 # Build output
 x64/
 Win32/

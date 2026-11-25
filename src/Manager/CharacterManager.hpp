@@ -57,6 +57,8 @@ public:
     bool contains(const std::string& id) const;
     const std::string& name(const std::string& id) const;
     const Character& character(const std::string& id);
+    const MovementDefinition* movement(const std::string& id);
+    void checkMovement(const std::string& text, const std::string& label) const;
     int appear(const std::string& id, int x, int y, const ActorSpawn& spawn);
     bool hasInstanceId(const std::string& id) const;
     void dismissOthers();

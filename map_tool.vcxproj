@@ -153,6 +153,8 @@
     <ClInclude Include="src\Game.hpp" />
     <ClCompile Include="src\Camera.cpp" />
     <ClInclude Include="src\Camera.hpp" />
+    <ClCompile Include="src\util\Log.cpp" />
+    <ClInclude Include="src\util\Log.hpp" />
     <ClCompile Include="src\model\Character.cpp" />
     <ClInclude Include="src\model\Character.hpp" />
     <ClCompile Include="src\service\CharacterService.cpp" />

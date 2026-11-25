@@ -1,4 +1,5 @@
 {
+  "debugMode": true,
   "project": "resources",
   "viewShift": { "x": 4, "y": 1 },
   "startMap": { "chapter": 1, "x": 0, "y": 0 },

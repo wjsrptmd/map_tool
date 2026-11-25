@@ -231,6 +231,177 @@ namespace maptool
 		return true;
 	}
 
+	bool Game::checkNpcMovement()
+	{
+		const Cell home = service_.playerCell();
+		const int player = service_.player();
+		const std::string playerDirection = characters_.at(player).direction;
+		if (characters_.movement(characters_.actor(player).body.id) != nullptr) return false;
+		const CharacterManager::Actor* found = nullptr;
+		for (const auto& actor : characters_.actors())
+		{
+			if (actor.player) continue;
+			const MovementDefinition* move = characters_.movement(actor.body.id);
+			if (move && move->route.size() >= 2)
+			{
+				found = &actor;
+				break;
+			}
+		}
+		if (!found) return false;
+		const int instance = found->instance;
+		const std::string instanceId = found->instanceId;
+		const std::string characterId = found->body.id;
+		const MovementDefinition definition = *characters_.movement(characterId);
+		const float interval = 1.f / definition.speed;
+		CharacterService::NpcCourse course;
+		if (definition.route.size() < 4) return false;
+		if (!service_.npcCourse(instanceId, course) || course.finished || course.routeIndex != 0 || course.position != course.origin)
+			return false;
+		const auto at = [&](std::size_t index) {
+			const MovementStep step = definition.route[index];
+			return Cell{course.origin.x + step.x, course.origin.y + step.y};
+		};
+		const MovementStep first = definition.route[1];
+		const std::string facing = first.y < 0 ? "up" : first.y > 0 ? "down" : first.x < 0 ? "left" : "right";
+		service_.advanceNpcs(interval * 0.25f);
+		if (!service_.npcCourse(instanceId, course) || course.routeIndex != 0 || characters_.actor(instance).x != at(0).x || characters_.actor(instance).y != at(0).y)
+			return false;
+		if (service_.playerCell() != home) return false;
+		service_.advanceNpcs(interval);
+		if (!service_.npcCourse(instanceId, course) || course.routeIndex != 1 || characters_.actor(instance).x != at(1).x || characters_.actor(instance).y != at(1).y)
+			return false;
+		const auto& body = characters_.actor(instance).body;
+		if (body.state != "walk" || body.direction != facing) return false;
+		const Animation& walk = characters_.character(characterId).animation("walk", facing);
+		const float cycle = static_cast<float>(walk.frames) / walk.fps;
+		if (!(walk.fps > 0.f) || !(interval * 0.25f + cycle < interval)) return false;
+		service_.advanceNpcs(cycle);
+		if (!service_.npcCourse(instanceId, course) || course.routeIndex != 1 || characters_.actor(instance).x != at(1).x)
+			return false;
+		if (characters_.actor(instance).body.state != "idle" || characters_.actor(instance).body.direction != facing) return false;
+		service_.advanceNpcs(interval * 5.f);
+		if (!service_.npcCourse(instanceId, course) || course.routeIndex != 2 || characters_.actor(instance).x != at(2).x || characters_.actor(instance).y != at(2).y)
+			return false;
+
+		if (!service_.standable(at(3), instance)) return false;
+		characters_.move(player, at(3).x, at(3).y);
+		if (service_.standable(at(3), instance)) return false;
+		service_.advanceNpcs(interval);
+		if (!service_.npcCourse(instanceId, course) || course.routeIndex != 2 || characters_.actor(instance).x != at(2).x)
+			return false;
+		if (characters_.actor(instance).body.state != "idle") return false;
+		characters_.move(player, home.x, home.y);
+		service_.advanceNpcs(interval);
+		if (!service_.npcCourse(instanceId, course) || course.routeIndex != 3 || characters_.actor(instance).x != at(3).x || characters_.actor(instance).y != at(3).y)
+			return false;
+
+		bool wall = false;
+		for (int y = 0; y < maps_.current().height && !wall; ++y)
+			for (int x = 0; x < maps_.current().width && !wall; ++x)
+			{
+				if (maps_.walkable({x, y})) continue;
+				if (service_.standable({x, y}, instance)) return false;
+				wall = true;
+			}
+		if (!wall) return false;
+		if (service_.standable({-1, 0}, instance) || service_.standable({maps_.current().width, 0}, instance)) return false;
+
+		CharacterService::NpcCourse saved;
+		if (!service_.npcCourse(instanceId, saved)) return false;
+		const int mapX = maps_.currentMapX();
+		const int mapY = maps_.currentMapY();
+		maps_.setCurrentMap(mapX + 1, mapY);
+		service_.enterMap();
+		for (const auto& actor : characters_.actors())
+			if (actor.instanceId == instanceId) return false;
+		service_.advanceNpcs(interval * 4.f);
+		maps_.setCurrentMap(mapX, mapY);
+		service_.enterMap();
+		CharacterService::NpcCourse returned;
+		if (!service_.npcCourse(instanceId, returned) || returned.position != saved.position || returned.routeIndex != saved.routeIndex || returned.finished != saved.finished)
+			return false;
+		bool restored = false;
+		for (const auto& actor : characters_.actors())
+		{
+			if (actor.instanceId != instanceId) continue;
+			restored = actor.x == saved.position.x && actor.y == saved.position.y;
+		}
+		if (!restored) return false;
+
+		bool loading = false;
+		const int width = maps_.current().width;
+		const int height = maps_.current().height;
+		for (int y = 0; y < height && !loading; ++y)
+		{
+			if (!maps_.walkable({width - 1, y})) continue;
+			characters_.move(player, width - 1, y);
+			service_.movePlayer({1, 0});
+			loading = maps_.loading();
+		}
+		for (int x = 0; x < width && !loading; ++x)
+		{
+			if (!maps_.walkable({x, height - 1})) continue;
+			characters_.move(player, x, height - 1);
+			service_.movePlayer({0, 1});
+			loading = maps_.loading();
+		}
+		if (!loading) return false;
+		CharacterService::NpcCourse frozen;
+		if (!service_.npcCourse(instanceId, frozen)) return false;
+		service_.advanceNpcs(interval * 5.f);
+		CharacterService::NpcCourse during;
+		if (!service_.npcCourse(instanceId, during) || during.position != frozen.position || during.routeIndex != frozen.routeIndex)
+			return false;
+		maps_.pollNeighbor();
+		maps_.setCurrentMap(mapX, mapY);
+		service_.enterMap();
+		characters_.move(player, home.x, home.y);
+		characters_.at(player).idle(playerDirection);
+		if (service_.playerCell() != home || maps_.currentMapX() != mapX || maps_.currentMapY() != mapY) return false;
+		if (!service_.npcCourse(instanceId, returned) || returned.position != frozen.position || returned.routeIndex != frozen.routeIndex)
+			return false;
+
+		const std::string label = "movement-test";
+		const std::string route = "\"route\":[{\"x\":0,\"y\":0},{\"x\":1,\"y\":0}]";
+		auto rejects = [&](const std::string& json, const std::string& field) {
+			try
+			{
+				characters_.checkMovement(json, label);
+				return false;
+			}
+			catch (const std::exception& error)
+			{
+				const std::string text = error.what();
+				return text.find(label) != std::string::npos && text.find(field) != std::string::npos;
+			}
+		};
+		if (!rejects("{" + route + ",\"loop\":true}", "move.speed")) return false;
+		if (!rejects("{\"speed\":0," + route + ",\"loop\":true}", "move.speed")) return false;
+		if (!rejects("{\"speed\":-1," + route + ",\"loop\":true}", "move.speed")) return false;
+		if (!rejects("{\"speed\":\"0.8\"," + route + ",\"loop\":true}", "move.speed")) return false;
+		if (!rejects("{\"speed\":1,\"type\":\"route\"," + route + ",\"loop\":true}", "unknown key type")) return false;
+		if (!rejects("{\"speed\":1,\"intervalMs\":100," + route + ",\"loop\":true}", "unknown key intervalMs")) return false;
+		if (!rejects("{\"speed\":1,\"idleChance\":0.5," + route + ",\"loop\":true}", "unknown key idleChance")) return false;
+		if (!rejects("{\"speed\":1," + route + ",\"loop\":true,\"extra\":1}", "unknown key extra")) return false;
+		if (!rejects("{\"speed\":1," + route + ",\"radius\":1,\"loop\":true}", "both set")) return false;
+		if (!rejects("{\"speed\":1}", "route or radius")) return false;
+		if (!rejects("{\"speed\":1,\"route\":[{\"x\":1,\"y\":0},{\"x\":2,\"y\":0}],\"loop\":false}", "must be the origin")) return false;
+		if (!rejects("{\"speed\":1,\"route\":[{\"x\":0,\"y\":0},{\"x\":2,\"y\":0}],\"loop\":false}", "not adjacent")) return false;
+		if (!rejects("{\"speed\":1,\"route\":[{\"x\":0,\"y\":0},{\"x\":1,\"y\":0},{\"x\":2,\"y\":0}],\"loop\":true}", "not a loop")) return false;
+		if (!rejects("{\"speed\":1,\"radius\":-1}", "move.radius")) return false;
+		try
+		{
+			characters_.checkMovement("{\"speed\":1,\"route\":[{\"x\":0,\"y\":0},{\"x\":1,\"y\":0},{\"x\":2,\"y\":0}],\"loop\":false}", label);
+			characters_.checkMovement("{\"speed\":1,\"radius\":0}", label);
+		}
+		catch (const std::exception&)
+		{
+			return false;
+		}
+		return service_.playerCell() == home;
+	}
+
 	bool Game::selfTest(const GameSettings& settings)
 	{
 		openChapter(settings);
@@ -259,7 +430,7 @@ namespace maptool
 		const auto& sheet = characters_.config();
 		if (size.x != static_cast<unsigned>(sheet.frameWidth * animation.frames) || size.y != static_cast<unsigned>(sheet.frameHeight))
 			return false;
-		if (!checkPlacements(settings)) return false;
+		if (!checkPlacements(settings) || !checkNpcMovement()) return false;
 
 		Animation sample;
 		sample.frames = 4;
@@ -404,7 +575,9 @@ namespace maptool
 					moveCharacter(directionStep(directions[moving]));
 					repeat.restart();
 				}
-				characters_.advance(animation.restart().asSeconds());
+				const float deltaSeconds = animation.restart().asSeconds();
+				service_.advanceNpcs(deltaSeconds);
+				characters_.advance(deltaSeconds);
 				drawGame(window);
 			}
 			window.display();

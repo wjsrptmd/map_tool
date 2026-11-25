@@ -1,7 +1,9 @@
 #pragma once
 #include <filesystem>
 #include <map>
+#include <optional>
 #include <string>
+#include <vector>
 
 namespace maptool
 {
@@ -21,6 +23,21 @@ struct Animation
 
 int animationFrame(const Animation& animation, float elapsed);
 
+struct MovementStep
+{
+    int x = 0;
+    int y = 0;
+};
+
+// Shared automatic-movement rule loaded from character.json. Timers stay on each NPC.
+struct MovementDefinition
+{
+    float speed = 0.f;
+    std::vector<MovementStep> route;
+    std::optional<int> radius;
+    bool loop = false;
+};
+
 // A character definition plus the pose of one character on the map.
 class Character
 {
@@ -32,6 +49,7 @@ public:
     std::string defaultState;
     std::string defaultDirection;
     std::map<std::string, std::map<std::string, Animation>> animations;
+    std::optional<MovementDefinition> movement;
     std::string state;
     std::string direction;
     float elapsed = 0.f;

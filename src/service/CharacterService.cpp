@@ -1,6 +1,8 @@
 #include "CharacterService.hpp"
 #include "../model/MapFile.hpp"
 #include <nlohmann/json.hpp>
+#include <algorithm>
+#include <cstdlib>
 #include <fstream>
 #include <initializer_list>
 #include <sstream>
@@ -97,7 +99,7 @@ std::string placementKey(int mapX, int mapY, int x, int y)
 }
 
 CharacterService::CharacterService(MapManger& maps, CharacterManager& characters)
-    : maps_(maps), characters_(characters)
+    : maps_(maps), characters_(characters), random_(std::random_device{}())
 {
 }
 
@@ -137,6 +139,17 @@ void CharacterService::enterMap()
         for (const auto& actor : map.actors)
         {
             if (!actor.enabled || characters_.hasInstanceId(actor.instanceId)) continue;
+            const MovementDefinition* definition = characters_.movement(actor.characterId);
+            const bool resume = definition && motions_.contains(actor.instanceId);
+            if (definition && !resume)
+            {
+                NpcMovementState state;
+                state.origin = actor.position;
+                state.position = actor.position;
+                state.direction = actor.direction;
+                motions_.emplace(actor.instanceId, state);
+            }
+            const Cell at = resume ? motions_.at(actor.instanceId).position : actor.position;
             ActorSpawn spawn;
             spawn.instanceId = actor.instanceId;
             spawn.collision = actor.collision;
@@ -146,7 +159,12 @@ void CharacterService::enterMap()
             spawn.mapY = mapY;
             spawn.state = actor.state;
             spawn.direction = actor.direction;
-            characters_.appear(actor.characterId, actor.position.x, actor.position.y, spawn);
+            const int instance = characters_.appear(actor.characterId, at.x, at.y, spawn);
+            if (!resume) continue;
+            const auto& state = motions_.at(actor.instanceId);
+            auto& body = characters_.at(instance);
+            if (state.walkRemaining > 0.f) body.walk(state.direction);
+            else body.idle(state.direction);
         }
     }
 }
@@ -156,7 +174,7 @@ void CharacterService::movePlayer(Cell step)
     if (step == Cell{} || maps_.loading()) return;
     const Cell before = playerCell();
     const Cell next = before + step;
-    if (maps_.walkable(next) && !occupied(next))
+    if (maps_.walkable(next) && !occupied(next, player_))
         characters_.move(player_, next.x, next.y);
     else if (!maps_.walkable(next))
         maps_.beginNeighbor(next);
@@ -364,14 +382,148 @@ void CharacterService::validate(const std::map<int, PlacedChapter>& chapters, in
     }
 }
 
-bool CharacterService::occupied(Cell cell) const
+void CharacterService::advanceNpcs(float seconds)
+{
+    if (seconds <= 0.f || maps_.loading()) return;
+    const int chapter = maps_.currentChapter();
+    const int mapX = maps_.currentMapX();
+    const int mapY = maps_.currentMapY();
+    struct PendingStep
+    {
+        int instance = 0;
+        std::string instanceId;
+        Cell destination;
+        std::string direction;
+        float cycle = 0.f;
+        std::size_t routeIndex = 0;
+        bool followRoute = false;
+    };
+    std::vector<PendingStep> steps;
+    std::vector<Cell> reserved;
+    for (const auto& actor : characters_.actors())
+    {
+        if (actor.player || actor.chapter != chapter || actor.mapX != mapX || actor.mapY != mapY) continue;
+        const auto found = motions_.find(actor.instanceId);
+        if (found == motions_.end()) continue;
+        auto& state = found->second;
+        const MovementDefinition* move = characters_.movement(actor.body.id);
+        if (!move) continue;
+        const MovementDefinition definition = *move;
+        if (state.walkRemaining > 0.f)
+        {
+            state.walkRemaining -= seconds;
+            if (state.walkRemaining <= 0.f)
+            {
+                state.walkRemaining = 0.f;
+                characters_.at(actor.instance).idle(state.direction);
+            }
+        }
+        if (state.finished) continue;
+        const float interval = 1.f / definition.speed;
+        state.elapsed += seconds;
+        if (state.elapsed < interval) continue;
+        state.elapsed -= interval;
+        if (state.elapsed >= interval) state.elapsed = 0.f;
+
+        Cell destination{};
+        std::size_t routeIndex = state.routeIndex;
+        bool followRoute = false;
+        if (definition.radius)
+        {
+            const Cell directions[] = {{0, -1}, {0, 1}, {-1, 0}, {1, 0}};
+            destination = Cell{actor.x, actor.y} + directions[std::uniform_int_distribution<int>(0, 3)(random_)];
+            const Cell offset = destination - state.origin;
+            if (std::abs(offset.x) + std::abs(offset.y) > *definition.radius)
+            {
+                state.walkRemaining = 0.f;
+                characters_.at(actor.instance).idle(state.direction);
+                continue;
+            }
+        }
+        else
+        {
+            std::size_t next = state.routeIndex + 1;
+            if (next >= definition.route.size())
+            {
+                if (!definition.loop)
+                {
+                    state.finished = true;
+                    state.walkRemaining = 0.f;
+                    characters_.at(actor.instance).idle(state.direction);
+                    continue;
+                }
+                next = 0;
+            }
+            const MovementStep relative = definition.route[next];
+            destination = state.origin + Cell{relative.x, relative.y};
+            routeIndex = next;
+            followRoute = true;
+        }
+        const Cell step = destination - Cell{actor.x, actor.y};
+        const bool held = std::find(reserved.begin(), reserved.end(), destination) != reserved.end();
+        if (step == Cell{} || held || !standable(destination, actor.instance))
+        {
+            state.walkRemaining = 0.f;
+            characters_.at(actor.instance).idle(state.direction);
+            continue;
+        }
+        const auto facing = directionName(step);
+        const Animation& animation = characters_.character(actor.body.id).animation("walk", facing);
+        if (!(animation.fps > 0.f))
+            throw std::runtime_error(actor.body.id + " walk/" + facing + " fps must be positive");
+        reserved.push_back(destination);
+        PendingStep pending;
+        pending.instance = actor.instance;
+        pending.instanceId = actor.instanceId;
+        pending.destination = destination;
+        pending.direction = facing;
+        pending.cycle = static_cast<float>(animation.frames) / animation.fps;
+        pending.routeIndex = routeIndex;
+        pending.followRoute = followRoute;
+        steps.push_back(std::move(pending));
+    }
+    for (const PendingStep& step : steps)
+    {
+        characters_.at(step.instance).walk(step.direction);
+        characters_.move(step.instance, step.destination.x, step.destination.y);
+        auto& state = motions_.at(step.instanceId);
+        state.position = step.destination;
+        state.direction = step.direction;
+        state.walkRemaining = step.cycle;
+        if (!step.followRoute) continue;
+        state.routeIndex = step.routeIndex;
+        const MovementDefinition& definition = *characters_.movement(characters_.actor(step.instance).body.id);
+        if (!definition.loop && step.routeIndex + 1 == definition.route.size()) state.finished = true;
+    }
+}
+
+bool CharacterService::npcCourse(const std::string& instanceId, NpcCourse& course) const
+{
+    const auto found = motions_.find(instanceId);
+    if (found == motions_.end()) return false;
+    course.origin = found->second.origin;
+    course.position = found->second.position;
+    course.routeIndex = found->second.routeIndex;
+    course.finished = found->second.finished;
+    return true;
+}
+
+bool CharacterService::standable(Cell cell, int ignoredInstance) const
+{
+    const auto& map = maps_.current();
+    if (cell.x < 0 || cell.y < 0 || cell.x >= map.width || cell.y >= map.height) return false;
+    if (!maps_.walkable(cell)) return false;
+    return !occupied(cell, ignoredInstance);
+}
+
+bool CharacterService::occupied(Cell cell, int ignoredInstance) const
 {
     for (const auto& actor : characters_.actors())
     {
-        if (actor.player || !actor.collision) continue;
+        if (actor.instance == ignoredInstance || actor.x != cell.x || actor.y != cell.y) continue;
         if (actor.chapter != maps_.currentChapter() || actor.mapX != maps_.currentMapX() || actor.mapY != maps_.currentMapY())
             continue;
-        if (actor.x == cell.x && actor.y == cell.y) return true;
+        if (actor.player || actor.collision) return true;
     }
     return false;
 }

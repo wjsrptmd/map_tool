@@ -1,4 +1,5 @@
 ﻿#include "Game.hpp"
+#include "util/Log.hpp"
 #include "model/MapFile.hpp"
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -58,11 +59,13 @@ namespace
 	maptool::GameSettings readSettings()
 	{
 		const auto root = loadJson(sourceDirectory() / "game_config.json");
-		requireKeys(root, { "project", "viewShift", "startMap", "character" });
+		requireKeys(root, { "debugMode", "project", "viewShift", "startMap", "character" });
 		requireKeys(root["viewShift"], { "x", "y" });
 		requireKeys(root["startMap"], { "chapter", "x", "y" });
 		requireKeys(root["character"], { "id", "moveInterval" });
 		maptool::GameSettings settings;
+		if (!root["debugMode"].is_boolean()) throw std::runtime_error("debugMode must be a boolean");
+		settings.debugMode = root["debugMode"].get<bool>();
 		settings.project = jsonText(root, "project");
 		settings.viewShift = { jsonInt(root["viewShift"], "x"), jsonInt(root["viewShift"], "y") };
 		settings.chapter = jsonInt(root["startMap"], "chapter");
@@ -79,6 +82,7 @@ int main(int argc, char** argv)
 	try
 	{
 		const auto settings = readSettings();
+		if (settings.debugMode) maptool::Log::open(sourceDirectory().parent_path() / "logs");
 		maptool::Game game;
 		const bool selfTest = argc > 1 && std::string(argv[1]) == "--self-test";
 		return game.run(settings, selfTest);
