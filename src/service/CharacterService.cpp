@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include "../util/Log.hpp"
 
 namespace maptool
 {
@@ -46,43 +47,43 @@ int chapterIndex(const std::string& key)
 
 void requireFields(const nlohmann::json& object, std::initializer_list<const char*> keys, const std::string& where)
 {
-    if (!object.is_object()) throw std::runtime_error(where + " needs an object");
+    if (!object.is_object()) maptool::fail(where + " needs an object");
     for (const auto& item : object.items())
     {
         bool known = false;
         for (const char* key : keys)
             if (item.key() == key) known = true;
-        if (!known) throw std::runtime_error(where + " has unknown key " + item.key());
+        if (!known) maptool::fail(where + " has unknown key " + item.key());
     }
     for (const char* key : keys)
-        if (!object.contains(key)) throw std::runtime_error(where + " " + std::string(key) + " is required");
+        if (!object.contains(key)) maptool::fail(where + " " + std::string(key) + " is required");
 }
 
 std::string requireText(const nlohmann::json& object, const char* key, const std::string& where)
 {
     if (!object.contains(key) || !object[key].is_string() || object[key].get<std::string>().empty())
-        throw std::runtime_error(where + "." + key + " must be text");
+        maptool::fail(where + "." + key + " must be text");
     return object[key].get<std::string>();
 }
 
 int requireInt(const nlohmann::json& object, const char* key, const std::string& where)
 {
     if (!object.contains(key) || !object[key].is_number_integer())
-        throw std::runtime_error(where + "." + key + " must be an integer");
+        maptool::fail(where + "." + key + " must be an integer");
     return object[key].get<int>();
 }
 
 bool requireBool(const nlohmann::json& object, const char* key, const std::string& where)
 {
     if (!object.contains(key) || !object[key].is_boolean())
-        throw std::runtime_error(where + "." + key + " must be a boolean");
+        maptool::fail(where + "." + key + " must be a boolean");
     return object[key].get<bool>();
 }
 
 const nlohmann::json& requireObject(const nlohmann::json& object, const char* key, const std::string& where)
 {
     if (!object.contains(key) || !object[key].is_object())
-        throw std::runtime_error(where + "." + key + " needs an object");
+        maptool::fail(where + "." + key + " needs an object");
     return object[key];
 }
 
@@ -107,7 +108,7 @@ void CharacterService::placePlayer(const std::string& characterId, int chapter, 
 {
     const auto file = projectDirectory() / "maps" / "world" / "character_placements.json";
     std::ifstream in(file);
-    if (!in) throw std::runtime_error("failed to open " + file.generic_string());
+    if (!in) maptool::fail("failed to open " + file.generic_string());
     std::ostringstream buffer;
     buffer << in.rdbuf();
     chapters_ = readPlacements(buffer.str(), file, chapter, startMap, characterId);
@@ -121,6 +122,8 @@ void CharacterService::placePlayer(const std::string& characterId, int chapter, 
     spawn.state = "idle";
     spawn.direction = placed.direction;
     player_ = characters_.appear(characterId, placed.player.x, placed.player.y, spawn);
+    Log::info("player start " + characterId + " at " + std::to_string(placed.player.x) + "," + std::to_string(placed.player.y)
+        + " facing " + placed.direction + " on map " + std::to_string(startMap.x) + "," + std::to_string(startMap.y));
     enterMap();
 }
 
@@ -132,13 +135,27 @@ void CharacterService::enterMap()
     if (player_ >= 0) characters_.placeOnMap(player_, chapter, mapX, mapY);
     characters_.dismissOthers();
     const auto found = chapters_.find(chapter);
-    if (found == chapters_.end()) return;
+    if (found == chapters_.end())
+    {
+        Log::warning("no placement for chapter " + std::to_string(chapter));
+        return;
+    }
+    int spawned = 0;
     for (const auto& map : found->second.maps)
     {
         if (map.x != mapX || map.y != mapY) continue;
         for (const auto& actor : map.actors)
         {
-            if (!actor.enabled || characters_.hasInstanceId(actor.instanceId)) continue;
+            if (!actor.enabled)
+            {
+                Log::info("skip disabled npc " + actor.instanceId);
+                continue;
+            }
+            if (characters_.hasInstanceId(actor.instanceId))
+            {
+                Log::warning("npc already present " + actor.instanceId);
+                continue;
+            }
             const MovementDefinition* definition = characters_.movement(actor.characterId);
             const bool resume = definition && motions_.contains(actor.instanceId);
             if (definition && !resume)
@@ -160,6 +177,10 @@ void CharacterService::enterMap()
             spawn.state = actor.state;
             spawn.direction = actor.direction;
             const int instance = characters_.appear(actor.characterId, at.x, at.y, spawn);
+            ++spawned;
+            if (resume)
+                Log::info("restore npc " + actor.instanceId + " at " + std::to_string(at.x) + "," + std::to_string(at.y)
+                    + " route " + std::to_string(motions_.at(actor.instanceId).routeIndex));
             if (!resume) continue;
             const auto& state = motions_.at(actor.instanceId);
             auto& body = characters_.at(instance);
@@ -167,6 +188,8 @@ void CharacterService::enterMap()
             else body.idle(state.direction);
         }
     }
+    Log::info("enter map " + std::to_string(chapter) + " " + std::to_string(mapX) + "," + std::to_string(mapY)
+        + " npcs " + std::to_string(spawned));
 }
 
 void CharacterService::movePlayer(Cell step)
@@ -174,14 +197,21 @@ void CharacterService::movePlayer(Cell step)
     if (step == Cell{} || maps_.loading()) return;
     const Cell before = playerCell();
     const Cell next = before + step;
+    const auto facing = directionName(step);
     if (maps_.walkable(next) && !occupied(next, player_))
         characters_.move(player_, next.x, next.y);
-    else if (!maps_.walkable(next))
+    else if (maps_.walkable(next))
+        Log::warning("player blocked by character at " + std::to_string(next.x) + "," + std::to_string(next.y) + " facing " + facing);
+    else
         maps_.beginNeighbor(next);
     const bool moved = playerCell() != before;
     auto& body = characters_.at(player_);
-    const auto facing = directionName(step);
-    if (moved) body.walk(facing);
+    if (moved)
+    {
+        body.walk(facing);
+        const Cell arrived = playerCell();
+        Log::info("player moved to " + std::to_string(arrived.x) + "," + std::to_string(arrived.y) + " facing " + facing);
+    }
     else body.idle(facing);
 }
 
@@ -189,10 +219,13 @@ void CharacterService::stopPlayer()
 {
     auto& body = characters_.at(player_);
     body.idle(body.direction);
+    Log::info("player stopped facing " + body.direction);
 }
 
 void CharacterService::arrive(Cell cell)
 {
+    Log::info("player arrives at " + std::to_string(cell.x) + "," + std::to_string(cell.y)
+        + " on map " + std::to_string(maps_.currentMapX()) + "," + std::to_string(maps_.currentMapY()));
     characters_.move(player_, cell.x, cell.y);
     enterMap();
 }
@@ -221,27 +254,27 @@ std::map<int, CharacterService::PlacedChapter> CharacterService::readPlacements(
         const std::string message = error.what();
         const auto prefix = file.generic_string() + ": ";
         if (message.starts_with(prefix)) throw;
-        throw std::runtime_error(prefix + message);
+        maptool::fail(prefix + message);
     }
 }
 
 std::map<int, CharacterService::PlacedChapter> CharacterService::parseText(const std::string& text)
 {
     const auto root = nlohmann::json::parse(text);
-    if (!root.is_object()) throw std::runtime_error("needs an object");
+    if (!root.is_object()) maptool::fail("needs an object");
     std::map<int, PlacedChapter> chapters;
     std::map<std::string, std::string> instances;
     for (const auto& item : root.items())
     {
         const int number = chapterIndex(item.key());
-        if (number <= 0) throw std::runtime_error(item.key() + " is not a chapter");
+        if (number <= 0) maptool::fail(item.key() + " is not a chapter");
         requireFields(item.value(), {"playerStart", "maps"}, item.key());
         PlacedChapter chapter;
         const auto& start = requireObject(item.value(), "playerStart", item.key());
         requireFields(start, {"position", "direction"}, item.key() + ".playerStart");
         chapter.player = requireCell(requireObject(start, "position", item.key() + ".playerStart"), item.key() + ".playerStart.position");
         chapter.direction = requireText(start, "direction", item.key() + ".playerStart");
-        if (!item.value()["maps"].is_array()) throw std::runtime_error(item.key() + ".maps must be an array");
+        if (!item.value()["maps"].is_array()) maptool::fail(item.key() + ".maps must be an array");
         std::size_t mapIndex = 0;
         for (const auto& mapValue : item.value()["maps"])
         {
@@ -252,8 +285,8 @@ std::map<int, CharacterService::PlacedChapter> CharacterService::parseText(const
             PlacedMap map;
             map.x = requireInt(coordinates, "x", mapWhere + ".map");
             map.y = requireInt(coordinates, "y", mapWhere + ".map");
-            if (map.x < 0 || map.y < 0) throw std::runtime_error(mapWhere + ".map is outside the map");
-            if (!mapValue["actors"].is_array()) throw std::runtime_error(mapWhere + ".actors must be an array");
+            if (map.x < 0 || map.y < 0) maptool::fail(mapWhere + ".map is outside the map");
+            if (!mapValue["actors"].is_array()) maptool::fail(mapWhere + ".actors must be an array");
             std::size_t actorIndex = 0;
             for (const auto& actorValue : mapValue["actors"])
             {
@@ -262,7 +295,7 @@ std::map<int, CharacterService::PlacedChapter> CharacterService::parseText(const
                 PlacedActor actor;
                 actor.instanceId = requireText(actorValue, "instanceId", actorWhere);
                 if (instances.contains(actor.instanceId))
-                    throw std::runtime_error(actorWhere + ".instanceId repeats " + actor.instanceId);
+                    maptool::fail(actorWhere + ".instanceId repeats " + actor.instanceId);
                 instances.emplace(actor.instanceId, actorWhere);
                 actor.characterId = requireText(actorValue, "characterId", actorWhere);
                 actor.position = requireCell(requireObject(actorValue, "position", actorWhere), actorWhere + ".position");
@@ -283,19 +316,19 @@ std::map<int, CharacterService::PlacedChapter> CharacterService::parseText(const
 void CharacterService::validate(const std::map<int, PlacedChapter>& chapters, int chapter, Cell startMap, const std::string& characterId)
 {
     const auto selected = chapters.find(chapter);
-    if (selected == chapters.end()) throw std::runtime_error("chapter" + std::to_string(chapter) + " is required");
+    if (selected == chapters.end()) maptool::fail("chapter" + std::to_string(chapter) + " is required");
     for (const auto& [number, placed] : chapters)
     {
         const auto chapterWhere = "chapter" + std::to_string(number);
         if (!isDirection(placed.direction))
-            throw std::runtime_error(chapterWhere + ".playerStart.direction is not a direction");
+            maptool::fail(chapterWhere + ".playerStart.direction is not a direction");
         try
         {
             characters_.character(characterId).animation("idle", placed.direction);
         }
         catch (const std::exception& error)
         {
-            throw std::runtime_error(chapterWhere + ".playerStart.direction " + error.what());
+            maptool::fail(chapterWhere + ".playerStart.direction " + error.what());
         }
         for (std::size_t i = 0; i < placed.maps.size(); ++i)
         {
@@ -305,16 +338,16 @@ void CharacterService::validate(const std::map<int, PlacedChapter>& chapters, in
                 const auto& actor = map.actors[j];
                 const auto where = chapterWhere + ".maps[" + std::to_string(i) + "].actors[" + std::to_string(j) + "]";
                 if (!characters_.contains(actor.characterId))
-                    throw std::runtime_error(where + ".characterId is unknown");
+                    maptool::fail(where + ".characterId is unknown");
                 if (!isDirection(actor.direction))
-                    throw std::runtime_error(where + ".direction is not a direction");
+                    maptool::fail(where + ".direction is not a direction");
                 try
                 {
                     characters_.character(actor.characterId).animation(actor.state, actor.direction);
                 }
                 catch (const std::exception& error)
                 {
-                    throw std::runtime_error(where + " " + error.what());
+                    maptool::fail(where + " " + error.what());
                 }
             }
         }
@@ -337,7 +370,7 @@ void CharacterService::validate(const std::map<int, PlacedChapter>& chapters, in
             }
             catch (const std::exception& error)
             {
-                throw std::runtime_error(mapWhere + ".map " + error.what());
+                maptool::fail(mapWhere + ".map " + error.what());
             }
             for (std::size_t j = 0; j < map.actors.size(); ++j)
             {
@@ -346,13 +379,13 @@ void CharacterService::validate(const std::map<int, PlacedChapter>& chapters, in
                 const auto width = maps_.current().width;
                 const auto height = maps_.current().height;
                 if (actor.position.x < 0 || actor.position.y < 0 || actor.position.x >= width || actor.position.y >= height)
-                    throw std::runtime_error(where + " is outside the map");
+                    maptool::fail(where + " is outside the map");
                 if (!maps_.walkable(actor.position))
-                    throw std::runtime_error(where + " is blocked");
+                    maptool::fail(where + " is blocked");
                 if (!actor.enabled || !actor.collision) continue;
                 const auto key = placementKey(map.x, map.y, actor.position.x, actor.position.y);
                 if (occupied.contains(key))
-                    throw std::runtime_error(where + " overlaps another character");
+                    maptool::fail(where + " overlaps another character");
                 occupied.emplace(key, where);
             }
         }
@@ -362,16 +395,16 @@ void CharacterService::validate(const std::map<int, PlacedChapter>& chapters, in
         }
         catch (const std::exception& error)
         {
-            throw std::runtime_error(chapterWhere + ".playerStart " + error.what());
+            maptool::fail(chapterWhere + ".playerStart " + error.what());
         }
         const auto width = maps_.current().width;
         const auto height = maps_.current().height;
         if (placed.player.x < 0 || placed.player.y < 0 || placed.player.x >= width || placed.player.y >= height)
-            throw std::runtime_error(chapterWhere + ".playerStart.position is outside the map");
+            maptool::fail(chapterWhere + ".playerStart.position is outside the map");
         if (!maps_.walkable(placed.player))
-            throw std::runtime_error(chapterWhere + ".playerStart.position is blocked");
+            maptool::fail(chapterWhere + ".playerStart.position is blocked");
         if (occupied.contains(placementKey(startMap.x, startMap.y, placed.player.x, placed.player.y)))
-            throw std::runtime_error(chapterWhere + ".playerStart.position overlaps another character");
+            maptool::fail(chapterWhere + ".playerStart.position overlaps another character");
         maps_.setCurrentMap(backX, backY);
     }
     catch (...)
@@ -435,6 +468,9 @@ void CharacterService::advanceNpcs(float seconds)
             const Cell offset = destination - state.origin;
             if (std::abs(offset.x) + std::abs(offset.y) > *definition.radius)
             {
+                Log::warning("npc " + actor.instanceId + " stays at " + std::to_string(actor.x) + "," + std::to_string(actor.y)
+                    + " because " + std::to_string(destination.x) + "," + std::to_string(destination.y)
+                    + " is outside radius " + std::to_string(*definition.radius));
                 state.walkRemaining = 0.f;
                 characters_.at(actor.instance).idle(state.direction);
                 continue;
@@ -447,6 +483,7 @@ void CharacterService::advanceNpcs(float seconds)
             {
                 if (!definition.loop)
                 {
+                    Log::info("npc " + actor.instanceId + " finished route at " + std::to_string(actor.x) + "," + std::to_string(actor.y));
                     state.finished = true;
                     state.walkRemaining = 0.f;
                     characters_.at(actor.instance).idle(state.direction);
@@ -463,6 +500,16 @@ void CharacterService::advanceNpcs(float seconds)
         const bool held = std::find(reserved.begin(), reserved.end(), destination) != reserved.end();
         if (step == Cell{} || held || !standable(destination, actor.instance))
         {
+            const char* reason = "blocked";
+            if (step == Cell{}) reason = "already there";
+            else if (held) reason = "reserved by another npc";
+            else if (destination.x < 0 || destination.y < 0 || destination.x >= maps_.current().width || destination.y >= maps_.current().height)
+                reason = "outside the map";
+            else if (!maps_.walkable(destination)) reason = "tile is blocked";
+            else reason = "occupied";
+            Log::warning("npc " + actor.instanceId + " stays at " + std::to_string(actor.x) + "," + std::to_string(actor.y)
+                + " and does not enter " + std::to_string(destination.x) + "," + std::to_string(destination.y)
+                + " because it is " + reason);
             state.walkRemaining = 0.f;
             characters_.at(actor.instance).idle(state.direction);
             continue;
@@ -470,7 +517,7 @@ void CharacterService::advanceNpcs(float seconds)
         const auto facing = directionName(step);
         const Animation& animation = characters_.character(actor.body.id).animation("walk", facing);
         if (!(animation.fps > 0.f))
-            throw std::runtime_error(actor.body.id + " walk/" + facing + " fps must be positive");
+            maptool::fail(actor.body.id + " walk/" + facing + " fps must be positive");
         reserved.push_back(destination);
         PendingStep pending;
         pending.instance = actor.instance;
@@ -486,6 +533,8 @@ void CharacterService::advanceNpcs(float seconds)
     {
         characters_.at(step.instance).walk(step.direction);
         characters_.move(step.instance, step.destination.x, step.destination.y);
+        Log::info("npc " + step.instanceId + " moved to " + std::to_string(step.destination.x) + "," + std::to_string(step.destination.y)
+            + " facing " + step.direction + (step.followRoute ? " route " + std::to_string(step.routeIndex) : " random"));
         auto& state = motions_.at(step.instanceId);
         state.position = step.destination;
         state.direction = step.direction;

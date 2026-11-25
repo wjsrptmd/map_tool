@@ -1,6 +1,7 @@
 #include "Character.hpp"
 #include <algorithm>
 #include <stdexcept>
+#include "../util/Log.hpp"
 
 namespace maptool
 {
@@ -16,10 +17,10 @@ const Animation& Character::animation(const std::string& pose, const std::string
 {
     const auto states = animations.find(pose);
     if (states == animations.end())
-        throw std::runtime_error("missing animation " + pose + "/" + facing);
+        maptool::fail("missing animation " + pose + "/" + facing);
     const auto found = states->second.find(facing);
     if (found == states->second.end())
-        throw std::runtime_error("missing animation " + pose + "/" + facing);
+        maptool::fail("missing animation " + pose + "/" + facing);
     return found->second;
 }
 

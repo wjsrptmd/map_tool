@@ -14,29 +14,29 @@ namespace
 	int jsonInt(const nlohmann::json& object, const char* key)
 	{
 		if (!object.contains(key) || !object[key].is_number_integer())
-			throw std::runtime_error(std::string(key) + " must be an integer");
+			maptool::fail(std::string(key) + " must be an integer");
 		return object[key].get<int>();
 	}
 
 	std::string jsonText(const nlohmann::json& object, const char* key)
 	{
 		if (!object.contains(key) || !object[key].is_string() || object[key].get<std::string>().empty())
-			throw std::runtime_error(std::string(key) + " must be text");
+			maptool::fail(std::string(key) + " must be text");
 		return object[key].get<std::string>();
 	}
 
 	void requireKeys(const nlohmann::json& object, std::initializer_list<const char*> keys)
 	{
-		if (!object.is_object()) throw std::runtime_error("needs an object");
+		if (!object.is_object()) maptool::fail("needs an object");
 		for (const auto& item : object.items())
 		{
 			bool known = false;
 			for (const char* key : keys)
 				if (item.key() == key) known = true;
-			if (!known) throw std::runtime_error("unknown key " + item.key());
+			if (!known) maptool::fail("unknown key " + item.key());
 		}
 		for (const char* key : keys)
-			if (!object.contains(key)) throw std::runtime_error(std::string(key) + " is required");
+			if (!object.contains(key)) maptool::fail(std::string(key) + " is required");
 	}
 
 	std::filesystem::path sourceDirectory()
@@ -45,14 +45,14 @@ namespace
 		{
 			const auto candidate = dir / "src" / "game_config.json";
 			if (std::filesystem::is_regular_file(candidate)) return candidate.parent_path();
-			if (dir.parent_path() == dir) throw std::runtime_error("src/game_config.json not found");
+			if (dir.parent_path() == dir) maptool::fail("src/game_config.json not found");
 		}
 	}
 
 	nlohmann::json loadJson(const std::filesystem::path& file)
 	{
 		std::ifstream in(file);
-		if (!in) throw std::runtime_error("failed to open " + file.generic_string());
+		if (!in) maptool::fail("failed to open " + file.generic_string());
 		return nlohmann::json::parse(in);
 	}
 
@@ -64,7 +64,7 @@ namespace
 		requireKeys(root["startMap"], { "chapter", "x", "y" });
 		requireKeys(root["character"], { "id", "moveInterval" });
 		maptool::GameSettings settings;
-		if (!root["debugMode"].is_boolean()) throw std::runtime_error("debugMode must be a boolean");
+		if (!root["debugMode"].is_boolean()) maptool::fail("debugMode must be a boolean");
 		settings.debugMode = root["debugMode"].get<bool>();
 		settings.project = jsonText(root, "project");
 		settings.viewShift = { jsonInt(root["viewShift"], "x"), jsonInt(root["viewShift"], "y") };
@@ -72,7 +72,7 @@ namespace
 		settings.startMap = { jsonInt(root["startMap"], "x"), jsonInt(root["startMap"], "y") };
 		settings.characterId = jsonText(root["character"], "id");
 		settings.moveInterval = jsonInt(root["character"], "moveInterval");
-		if (settings.moveInterval <= 0) throw std::runtime_error("moveInterval must be positive");
+		if (settings.moveInterval <= 0) maptool::fail("moveInterval must be positive");
 		return settings;
 	}
 }
@@ -83,12 +83,22 @@ int main(int argc, char** argv)
 	{
 		const auto settings = readSettings();
 		if (settings.debugMode) maptool::Log::open(sourceDirectory().parent_path() / "logs");
+		maptool::Log::info("---------- program start ----------");
+		maptool::Log::info("settings project " + settings.project
+			+ " chapter " + std::to_string(settings.chapter)
+			+ " map " + std::to_string(settings.startMap.x) + "," + std::to_string(settings.startMap.y)
+			+ " character " + settings.characterId
+			+ " moveInterval " + std::to_string(settings.moveInterval)
+			+ (settings.debugMode ? " debugMode on" : " debugMode off"));
 		maptool::Game game;
 		const bool selfTest = argc > 1 && std::string(argv[1]) == "--self-test";
+		maptool::Log::info(selfTest ? "run self-test" : "run play");
 		return game.run(settings, selfTest);
 	}
 	catch (const std::exception& error)
 	{
+		try { maptool::Log::error(std::string("uncaught exception: ") + error.what()); }
+		catch (...) {}
 		std::cerr << error.what() << '\n';
 		return 1;
 	}

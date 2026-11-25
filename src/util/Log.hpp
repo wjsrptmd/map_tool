@@ -3,6 +3,7 @@
 #include <fstream>
 #include <mutex>
 #include <source_location>
+#include <stdexcept>
 #include <string>
 
 namespace maptool
@@ -28,4 +29,22 @@ private:
     std::ofstream file_;
     bool enabled_ = false;
 };
+
+[[noreturn]] inline void fail(const std::string& message, const std::source_location& location = std::source_location::current())
+{
+    Log::error(message, location);
+    throw std::runtime_error(message);
+}
+
+[[noreturn]] inline void failRange(const std::string& message, const std::source_location& location = std::source_location::current())
+{
+    Log::error(message, location);
+    throw std::out_of_range(message);
+}
+
+[[noreturn]] inline void failArgument(const std::string& message, const std::source_location& location = std::source_location::current())
+{
+    Log::error(message, location);
+    throw std::invalid_argument(message);
+}
 }

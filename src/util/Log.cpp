@@ -17,7 +17,7 @@ std::tm localTime()
 
 std::string formatTime(const std::tm& local, const char* pattern)
 {
-    char text[16];
+    char text[32];
     if (std::strftime(text, sizeof text, pattern, &local) == 0)
         throw std::runtime_error("failed to format the log time");
     return text;

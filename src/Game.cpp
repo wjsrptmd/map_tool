@@ -3,6 +3,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include "util/Log.hpp"
 
 namespace maptool
 {
@@ -66,7 +67,9 @@ namespace maptool
 		const auto width = static_cast<unsigned>(sheet.frameWidth * animation.frames);
 		const auto height = static_cast<unsigned>(sheet.frameHeight);
 		if (size.x != width || size.y != height)
-			throw std::runtime_error(animation.image.generic_string() + " has the wrong size");
+			maptool::fail(animation.image.generic_string() + " has the wrong size " + std::to_string(size.x) + "x" + std::to_string(size.y)
+				+ ", expected " + std::to_string(width) + "x" + std::to_string(height));
+		Log::info("loaded sprite " + key + " " + std::to_string(size.x) + "x" + std::to_string(size.y));
 		return sprites_.emplace(key, std::move(texture)).first->second;
 	}
 
@@ -117,6 +120,9 @@ namespace maptool
 
 	void Game::openChapter(const GameSettings& settings)
 	{
+		Log::info("open chapter " + std::to_string(settings.chapter)
+			+ " map " + std::to_string(settings.startMap.x) + "," + std::to_string(settings.startMap.y)
+			+ " character " + settings.characterId);
 		maps_.loadChapter(settings.chapter);
 		maps_.setCurrentMap(settings.startMap.x, settings.startMap.y);
 		service_.placePlayer(settings.characterId, settings.chapter, settings.startMap);
@@ -511,6 +517,7 @@ namespace maptool
 		const auto width = static_cast<unsigned>(maps_.viewColumns() * config.tileSize + config.margin.x * 2);
 		const auto height = static_cast<unsigned>(maps_.viewRows() * config.tileSize + config.margin.y * 2);
 		const std::string title = config.windowTitle + " - " + maps_.projectName();
+		Log::info("window " + std::to_string(width) + "x" + std::to_string(height) + " " + title);
 		sf::RenderWindow window(sf::VideoMode({ width, height }), sf::String::fromUtf8(title.begin(), title.end()));
 		window.setFramerateLimit(static_cast<unsigned>(config.framerate));
 		constexpr sf::Keyboard::Key directions[] = {
@@ -524,9 +531,14 @@ namespace maptool
 		{
 			while (const auto event = window.pollEvent())
 			{
-				if (event->is<sf::Event::Closed>()) window.close();
+				if (event->is<sf::Event::Closed>())
+				{
+					Log::info("window closed");
+					window.close();
+				}
 				else if (event->is<sf::Event::FocusLost>())
 				{
+					Log::info("focus lost");
 					held.fill(false);
 					moving = -1;
 					service_.stopPlayer();
@@ -558,6 +570,7 @@ namespace maptool
 			}
 			if (auto arrived = maps_.pollNeighbor())
 			{
+				Log::info("neighbor landing " + std::to_string(arrived->x) + "," + std::to_string(arrived->y));
 				service_.arrive(*arrived);
 				maps_.follow(camera_.focus(maps_, service_.playerCell()));
 				repeat.restart();
@@ -589,11 +602,19 @@ namespace maptool
 	{
 		try
 		{
-			if (selfTest) return this->selfTest(settings) ? 0 : 1;
+			if (selfTest)
+			{
+				const bool passed = this->selfTest(settings);
+				if (passed) Log::info("self-test passed");
+				else Log::error("self-test failed");
+				return passed ? 0 : 1;
+			}
 			return play(settings);
 		}
 		catch (const std::exception& error)
 		{
+			try { Log::error(std::string("game stopped: ") + error.what()); }
+			catch (...) {}
 			std::cerr << error.what() << '\n';
 			return 1;
 		}

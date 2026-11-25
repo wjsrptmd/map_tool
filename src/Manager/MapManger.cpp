@@ -8,6 +8,7 @@
 #include <system_error>
 #include <thread>
 #include <utility>
+#include "../util/Log.hpp"
 
 namespace maptool
 {
@@ -18,7 +19,7 @@ void requireKnownTiles(const std::map<std::string, TileInfo>& tileInfo, const Ma
     for (const auto& row : map.tiles)
         for (const auto& id : row)
             if (!tileInfo.contains(id))
-                throw std::runtime_error(file.filename().string() + " has unknown tile " + id);
+                maptool::fail(file.filename().string() + " has unknown tile " + id);
 }
 
 bool isTileId(const std::string& id)
@@ -32,32 +33,32 @@ bool isTileId(const std::string& id)
 std::string requireText(const nlohmann::json& object, const std::string& id, const char* key)
 {
     if (!object.contains(key) || !object[key].is_string())
-        throw std::runtime_error(id + " needs " + key);
+        maptool::fail(id + " needs " + key);
     auto text = object[key].get<std::string>();
-    if (text.empty()) throw std::runtime_error(id + " has an empty " + key);
+    if (text.empty()) maptool::fail(id + " has an empty " + key);
     return text;
 }
 
 float requireNumber(const nlohmann::json& object, const char* key)
 {
     if (!object.contains(key) || !object[key].is_number())
-        throw std::runtime_error(std::string(key) + " must be a number");
+        maptool::fail(std::string(key) + " must be a number");
     const float value = object[key].get<float>();
-    if (value <= 0.f) throw std::runtime_error(std::string(key) + " must be positive");
+    if (value <= 0.f) maptool::fail(std::string(key) + " must be positive");
     return value;
 }
 
 Color requireColor(const nlohmann::json& object, const char* key)
 {
     if (!object.contains(key) || !object[key].is_array() || object[key].size() != 3)
-        throw std::runtime_error(std::string(key) + " must be [r, g, b]");
+        maptool::fail(std::string(key) + " must be [r, g, b]");
     std::uint8_t channels[3] = {};
     for (std::size_t i = 0; i < 3; ++i)
     {
         const auto& channel = object[key][i];
-        if (!channel.is_number_integer()) throw std::runtime_error(std::string(key) + " channels must be integers");
+        if (!channel.is_number_integer()) maptool::fail(std::string(key) + " channels must be integers");
         const int value = channel.get<int>();
-        if (value < 0 || value > 255) throw std::runtime_error(std::string(key) + " channels must be 0 to 255");
+        if (value < 0 || value > 255) maptool::fail(std::string(key) + " channels must be 0 to 255");
         channels[i] = static_cast<std::uint8_t>(value);
     }
     return {channels[0], channels[1], channels[2]};
@@ -83,25 +84,27 @@ MapManger::MapManger()
     mapDir_ = project / "maps";
     std::error_code error;
     if (!std::filesystem::is_directory(mapDir_, error))
-        throw std::runtime_error("maps not found: " + mapDir_.generic_string());
+        maptool::fail("maps not found: " + mapDir_.generic_string());
     loadTileInfo();
+    Log::info("loaded " + std::to_string(currentMap_.size()) + " tiles from " + mapDir_.generic_string());
 }
 void MapManger::loadChapter(int chapter)
 {
-    if (chapter <= 0) throw std::invalid_argument("chapter must be positive");
-    if (pending_.valid()) throw std::runtime_error("cannot load a chapter while a map is loading");
+    if (chapter <= 0) maptool::failArgument("chapter must be positive");
+    if (pending_.valid()) maptool::fail("cannot load a chapter while a map is loading");
     const auto dir = mapDir_ / "world" / ("chapter" + std::to_string(chapter));
     std::error_code error;
     if (!std::filesystem::is_directory(dir, error))
-        throw std::runtime_error("chapter not found: " + dir.generic_string());
+        maptool::fail("chapter not found: " + dir.generic_string());
     const auto worldFiles = worldMapFiles(dir);
     for (const auto& file : worldFiles)
     {
         auto map = loadMapFile(file.path);
-        if (map.kind != "world") throw std::runtime_error(file.path.filename().string() + " is not a world map");
+        if (map.kind != "world") maptool::fail(file.path.filename().string() + " is not a world map");
         requireKnownTiles(currentMap_, map, file.path);
     }
     chapter_ = chapter;
+    Log::info("load chapter " + std::to_string(chapter) + " maps " + std::to_string(worldFiles.size()));
     setCurrentMap(worldFiles.front().x, worldFiles.front().y);
 }
 bool MapManger::worldFileExists(int x, int y) const noexcept
@@ -117,7 +120,7 @@ MapData MapManger::loadWorld(int x, int y) const
 {
     const auto path = worldFilePath(x, y);
     auto loaded = loadMapFile(path);
-    if (loaded.kind != "world") throw std::runtime_error(path.filename().string() + " is not a world map");
+    if (loaded.kind != "world") maptool::fail(path.filename().string() + " is not a world map");
     requireKnownTiles(currentMap_, loaded, path);
     MapData map;
     map.name = std::move(loaded.name);
@@ -136,11 +139,12 @@ void MapManger::preloadNeighbors(int x, int y)
         const MapCoord key{nextX, nextY};
         if (loaded_.contains(key) || !worldFileExists(nextX, nextY)) continue;
         loaded_.emplace(key, loadWorld(nextX, nextY));
+        Log::info("preloaded map " + std::to_string(nextX) + "," + std::to_string(nextY));
     }
 }
 void MapManger::setCurrentMap(int x, int y)
 {
-    if (!worldFileExists(x, y)) throw std::out_of_range("World map does not exist");
+    if (!worldFileExists(x, y)) maptool::failRange("World map does not exist");
     const MapCoord key{x, y};
     if (const auto found = loaded_.find(key); found != loaded_.end())
         adopt(x, y, found->second);
@@ -153,6 +157,8 @@ void MapManger::adopt(int x, int y, MapData map)
     current_ = std::move(map);
     currentX_ = x;
     currentY_ = y;
+    Log::info("current map " + std::to_string(x) + "," + std::to_string(y) + " " + current_.name
+        + " " + std::to_string(current_.width) + "x" + std::to_string(current_.height));
     focus_ = {};
     refreshView();
     preloadNeighbors(x, y);
@@ -165,15 +171,26 @@ std::optional<MapManger::PendingMap> MapManger::readNeighbor(std::filesystem::pa
     int currentWidth, int currentHeight, Cell cell, int nextX, int nextY)
 {
     auto loaded = loadMapFile(path);
-    if (loaded.kind != "world") throw std::runtime_error(path.filename().string() + " is not a world map");
+    if (loaded.kind != "world") maptool::fail(path.filename().string() + " is not a world map");
     for (const auto& row : loaded.tiles)
         for (const auto& id : row)
             if (!canEnter.contains(id))
-                throw std::runtime_error(path.filename().string() + " has unknown tile " + id);
+                maptool::fail(path.filename().string() + " has unknown tile " + id);
     const auto landing = landingCell(cell, currentWidth, currentHeight, loaded.width, loaded.height);
-    if (!landing) return std::nullopt;
-    const auto found = canEnter.find(loaded.tiles[static_cast<std::size_t>(landing->y)][static_cast<std::size_t>(landing->x)]);
-    if (found == canEnter.end() || !found->second) return std::nullopt;
+    if (!landing)
+    {
+        Log::warning("neighbor " + std::to_string(nextX) + "," + std::to_string(nextY) + " has no landing from "
+            + std::to_string(cell.x) + "," + std::to_string(cell.y));
+        return std::nullopt;
+    }
+    const auto& tile = loaded.tiles[static_cast<std::size_t>(landing->y)][static_cast<std::size_t>(landing->x)];
+    const auto found = canEnter.find(tile);
+    if (found == canEnter.end() || !found->second)
+    {
+        Log::warning("neighbor landing blocked at " + std::to_string(nextX) + "," + std::to_string(nextY)
+            + " cell " + std::to_string(landing->x) + "," + std::to_string(landing->y) + " tile " + tile);
+        return std::nullopt;
+    }
 
     PendingMap pending;
     pending.x = nextX;
@@ -201,16 +218,34 @@ bool MapManger::beginNeighbor(Cell cell)
     else if (insideY && cell.x >= current_.width)
         ++nextX;
     else
+    {
+        Log::warning("blocked cell " + std::to_string(cell.x) + "," + std::to_string(cell.y)
+            + " on map " + std::to_string(currentX_) + "," + std::to_string(currentY_));
         return false;
-    if (!worldFileExists(nextX, nextY)) return false;
+    }
+    if (!worldFileExists(nextX, nextY))
+    {
+        Log::warning("missing neighbor map " + std::to_string(nextX) + "," + std::to_string(nextY));
+        return false;
+    }
 
     if (const auto found = loaded_.find(MapCoord{nextX, nextY}); found != loaded_.end())
     {
         const auto landing = landingCell(cell, current_.width, current_.height, found->second.width, found->second.height);
-        if (!landing) return false;
+        if (!landing)
+        {
+            Log::warning("neighbor " + std::to_string(nextX) + "," + std::to_string(nextY) + " has no landing from "
+                + std::to_string(cell.x) + "," + std::to_string(cell.y));
+            return false;
+        }
         const auto& id = found->second.tiles[static_cast<std::size_t>(landing->y)][static_cast<std::size_t>(landing->x)];
         const auto info = currentMap_.find(id);
-        if (info == currentMap_.end() || !info->second.canEnter) return false;
+        if (info == currentMap_.end() || !info->second.canEnter)
+        {
+            Log::warning("neighbor landing blocked at " + std::to_string(nextX) + "," + std::to_string(nextY)
+                + " cell " + std::to_string(landing->x) + "," + std::to_string(landing->y) + " tile " + id);
+            return false;
+        }
         PendingMap ready;
         ready.x = nextX;
         ready.y = nextY;
@@ -220,6 +255,8 @@ bool MapManger::beginNeighbor(Cell cell)
         auto future = promise.get_future();
         promise.set_value(std::move(ready));
         pending_ = std::move(future);
+        Log::info("open cached neighbor " + std::to_string(nextX) + "," + std::to_string(nextY)
+            + " landing " + std::to_string(landing->x) + "," + std::to_string(landing->y));
         return true;
     }
 
@@ -232,6 +269,7 @@ bool MapManger::beginNeighbor(Cell cell)
     pending_ = std::async(std::launch::async, [path, canEnter, width, height, cell, nextX, nextY] {
         return readNeighbor(path, canEnter, width, height, cell, nextX, nextY);
     });
+    Log::info("load neighbor " + path.generic_string());
     return true;
 }
 std::optional<Cell> MapManger::pollNeighbor()
@@ -239,7 +277,11 @@ std::optional<Cell> MapManger::pollNeighbor()
     if (!pending_.valid()) return std::nullopt;
     if (pending_.wait_for(std::chrono::seconds(0)) != std::future_status::ready) return std::nullopt;
     auto loaded = pending_.get();
-    if (!loaded) return std::nullopt;
+    if (!loaded)
+    {
+        Log::warning("neighbor load produced no landing");
+        return std::nullopt;
+    }
     const Cell landing = loaded->landing;
     adopt(loaded->x, loaded->y, std::move(loaded->map));
     return landing;
@@ -275,7 +317,7 @@ bool MapManger::walkable(Cell cell) const noexcept
 const TileInfo& MapManger::tile(const std::string& id) const
 {
     const auto found = currentMap_.find(id);
-    if (found == currentMap_.end()) throw std::out_of_range("unknown tile " + id);
+    if (found == currentMap_.end()) maptool::failRange("unknown tile " + id);
     return found->second;
 }
 void MapManger::loadTileInfo()
@@ -284,27 +326,27 @@ void MapManger::loadTileInfo()
     try
     {
         std::ifstream in(file);
-        if (!in) throw std::runtime_error("failed to open " + file.generic_string());
+        if (!in) maptool::fail("failed to open " + file.generic_string());
         const auto root = nlohmann::json::parse(in);
-        if (!root.is_object()) throw std::runtime_error("needs an object");
+        if (!root.is_object()) maptool::fail("needs an object");
         for (const auto& field : root.items())
             if (field.key() != "globalConfig" && field.key() != "tiles")
-                throw std::runtime_error("unknown key " + field.key());
+                maptool::fail("unknown key " + field.key());
         if (!root.contains("globalConfig") || !root["globalConfig"].is_object())
-            throw std::runtime_error("needs globalConfig");
+            maptool::fail("needs globalConfig");
         const auto& config = root["globalConfig"];
         for (const auto& field : config.items())
             if (field.key() != "viewColumns" && field.key() != "viewRows" && field.key() != "tileSize"
                 && field.key() != "marginX" && field.key() != "marginY" && field.key() != "framerate"
                 && field.key() != "windowTitle" && field.key() != "backgroundColor"
                 && field.key() != "emptyTileColor")
-                throw std::runtime_error("globalConfig has unknown key " + field.key());
+                maptool::fail("globalConfig has unknown key " + field.key());
         auto requirePositive = [](const nlohmann::json& object, const char* key)
         {
             if (!object.contains(key) || !object[key].is_number_integer())
-                throw std::runtime_error(std::string(key) + " must be an integer");
+                maptool::fail(std::string(key) + " must be an integer");
             const int size = object[key].get<int>();
-            if (size <= 0) throw std::runtime_error(std::string(key) + " must be positive");
+            if (size <= 0) maptool::fail(std::string(key) + " must be positive");
             return size;
         };
         config_.viewColumns = requirePositive(config, "viewColumns");
@@ -315,33 +357,33 @@ void MapManger::loadTileInfo()
         config_.windowTitle = requireText(config, "globalConfig", "windowTitle");
         config_.background = requireColor(config, "backgroundColor");
         config_.emptyTile = requireColor(config, "emptyTileColor");
-        if (!root.contains("tiles") || !root["tiles"].is_array()) throw std::runtime_error("needs tiles");
+        if (!root.contains("tiles") || !root["tiles"].is_array()) maptool::fail("needs tiles");
         for (const auto& value : root["tiles"])
         {
-            if (!value.is_object()) throw std::runtime_error("tile needs an object");
+            if (!value.is_object()) maptool::fail("tile needs an object");
             for (const auto& field : value.items())
                 if (field.key() != "id" && field.key() != "name" && field.key() != "image" && field.key() != "canEnter")
-                    throw std::runtime_error("tile has unknown key " + field.key());
+                    maptool::fail("tile has unknown key " + field.key());
             const auto id = requireText(value, "tile", "id");
-            if (!isTileId(id)) throw std::runtime_error(id + " is not a numeric tile id");
-            if (currentMap_.contains(id)) throw std::runtime_error("repeats tile " + id);
+            if (!isTileId(id)) maptool::fail(id + " is not a numeric tile id");
+            if (currentMap_.contains(id)) maptool::fail("repeats tile " + id);
             if (!value.contains("canEnter") || !value["canEnter"].is_boolean())
-                throw std::runtime_error(id + " needs name, image and canEnter");
+                maptool::fail(id + " needs name, image and canEnter");
             auto imagePath = std::filesystem::path(requireText(value, id, "image"));
             if (imagePath.is_relative()) imagePath = mapDir_ / imagePath;
             if (!std::filesystem::is_regular_file(imagePath))
-                throw std::runtime_error(id + " image not found: " + imagePath.generic_string());
+                maptool::fail(id + " image not found: " + imagePath.generic_string());
             TileInfo info;
             info.name = requireText(value, id, "name");
             info.image = std::move(imagePath);
             info.canEnter = value["canEnter"].get<bool>();
             currentMap_.emplace(id, std::move(info));
         }
-        if (currentMap_.empty()) throw std::runtime_error("has no tiles");
+        if (currentMap_.empty()) maptool::fail("has no tiles");
     }
     catch (const std::exception& error)
     {
-        throw std::runtime_error(file.generic_string() + ": " + error.what());
+        maptool::fail(file.generic_string() + ": " + error.what());
     }
 }
 }

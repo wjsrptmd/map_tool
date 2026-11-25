@@ -3,6 +3,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <string>
+#include "../util/Log.hpp"
 
 namespace maptool
 {
@@ -21,8 +22,8 @@ namespace maptool
 			std::size_t used = 0;
 			int value = 0;
 			try { value = std::stoi(text, &used); }
-			catch (const std::exception&) { throw std::runtime_error(where + " is not an integer"); }
-			if (used != text.size()) throw std::runtime_error(where + " is not an integer");
+			catch (const std::exception&) { maptool::fail(where + " is not an integer"); }
+			if (used != text.size()) maptool::fail(where + " is not an integer");
 			return value;
 		}
 
@@ -45,7 +46,7 @@ namespace maptool
 				if (parent == dir) break;
 				dir = parent;
 			}
-			throw std::runtime_error("config/start_config.json not found from " + start.generic_string());
+			maptool::fail("config/start_config.json not found from " + start.generic_string());
 		}
 
 	}
@@ -54,14 +55,14 @@ namespace maptool
 	{
 		const auto dir = repositoryRoot() / "resources";
 		if (!std::filesystem::is_directory(dir))
-			throw std::runtime_error("resources not found: " + dir.generic_string());
+			maptool::fail("resources not found: " + dir.generic_string());
 		return dir;
 	}
 
 	MapFile loadMapFile(const std::filesystem::path& file)
 	{
 		std::ifstream in(file);
-		if (!in) throw std::runtime_error("failed to open " + file.string());
+		if (!in) maptool::fail("failed to open " + file.string());
 		const auto where = file.filename().string();
 		MapFile map;
 		bool seenKind = false, seenName = false, seenWidth = false, seenHeight = false, inTiles = false;
@@ -80,7 +81,7 @@ namespace maptool
 				{
 					const auto next = line.find('-', start);
 					const auto token = line.substr(start, next == std::string::npos ? std::string::npos : next - start);
-					if (!isTileId(token)) throw std::runtime_error(where + " has a tile id that is not digits");
+					if (!isTileId(token)) maptool::fail(where + " has a tile id that is not digits");
 					row.push_back(token);
 					if (next == std::string::npos) break;
 					start = next + 1;
@@ -92,41 +93,43 @@ namespace maptool
 			if (line.empty() || line.front() == ';' || line.front() == '#') continue;
 			if (line == "-") { inTiles = true; continue; }
 			const auto dash = line.find('-');
-			if (dash == std::string::npos) throw std::runtime_error(where + " has a header line without '-'");
+			if (dash == std::string::npos) maptool::fail(where + " has a header line without '-'");
 			const auto key = trim(line.substr(0, dash));
 			const auto value = trim(line.substr(dash + 1));
 			if (key == "kind")
 			{
-				if (seenKind) throw std::runtime_error(where + " repeats kind");
-				if (value != "world") throw std::runtime_error(where + " has unknown kind " + value);
+				if (seenKind) maptool::fail(where + " repeats kind");
+				if (value != "world") maptool::fail(where + " has unknown kind " + value);
 				map.kind = value; seenKind = true;
 			}
 			else if (key == "name")
 			{
-				if (seenName) throw std::runtime_error(where + " repeats name");
-				if (value.empty()) throw std::runtime_error(where + " has an empty name");
+				if (seenName) maptool::fail(where + " repeats name");
+				if (value.empty()) maptool::fail(where + " has an empty name");
 				map.name = value; seenName = true;
 			}
 			else if (key == "width" || key == "height")
 			{
 				auto& seen = key == "width" ? seenWidth : seenHeight;
-				if (seen) throw std::runtime_error(where + " repeats " + key);
+				if (seen) maptool::fail(where + " repeats " + key);
 				const int size = readInt(value, where + " " + key);
-				if (size <= 0) throw std::runtime_error(where + " has a non-positive " + key);
+				if (size <= 0) maptool::fail(where + " has a non-positive " + key);
 				(key == "width" ? map.width : map.height) = size;
 				seen = true;
 			}
-			else throw std::runtime_error(where + " has unknown key " + key);
+			else maptool::fail(where + " has unknown key " + key);
 		}
 		if (!seenKind || !seenName || !seenWidth || !seenHeight)
-			throw std::runtime_error(where + " needs kind, name, width and height");
-		if (map.tiles.empty() || map.tiles.front().empty()) throw std::runtime_error(where + " has no tiles");
+			maptool::fail(where + " needs kind, name, width and height");
+		if (map.tiles.empty() || map.tiles.front().empty()) maptool::fail(where + " has no tiles");
 		const auto width = map.tiles.front().size();
 		for (const auto& row : map.tiles)
-			if (row.size() != width) throw std::runtime_error(where + " has rows of different widths");
+			if (row.size() != width) maptool::fail(where + " has rows of different widths");
 		const auto height = map.tiles.size();
 		if (map.width != static_cast<int>(width) || map.height != static_cast<int>(height))
-			throw std::runtime_error(where + " size does not match its tiles");
+			maptool::fail(where + " size does not match its tiles");
+		Log::info("loaded map file " + file.generic_string() + " " + map.name
+			+ " " + std::to_string(map.width) + "x" + std::to_string(map.height));
 		return map;
 	}
 
@@ -141,7 +144,7 @@ namespace maptool
 
 	std::vector<WorldMapFile> worldMapFiles(const std::filesystem::path& dir)
 	{
-		if (!std::filesystem::is_directory(dir)) throw std::runtime_error(dir.generic_string() + " not found");
+		if (!std::filesystem::is_directory(dir)) maptool::fail(dir.generic_string() + " not found");
 		std::vector<WorldMapFile> files;
 		for (const auto& entry : std::filesystem::directory_iterator(dir))
 		{
@@ -151,16 +154,16 @@ namespace maptool
 			int y = 0, x = 0;
 			if (split == std::string::npos || stem.find('_', split + 1) != std::string::npos ||
 				!readCoord(stem.substr(0, split), y) || !readCoord(stem.substr(split + 1), x))
-				throw std::runtime_error(entry.path().filename().string() + " must be named y_x.map");
+				maptool::fail(entry.path().filename().string() + " must be named y_x.map");
 			files.push_back({ entry.path(), x, y });
 		}
-		if (files.empty()) throw std::runtime_error(dir.generic_string() + " has no .map files");
+		if (files.empty()) maptool::fail(dir.generic_string() + " has no .map files");
 		std::sort(files.begin(), files.end(), [](const auto& a, const auto& b) {
 			return a.y < b.y || (a.y == b.y && a.x < b.x);
 			});
 		for (std::size_t i = 1; i < files.size(); ++i)
 			if (files[i].x == files[i - 1].x && files[i].y == files[i - 1].y)
-				throw std::runtime_error("duplicate world map coordinate " + std::to_string(files[i].y) + "_" + std::to_string(files[i].x));
+				maptool::fail("duplicate world map coordinate " + std::to_string(files[i].y) + "_" + std::to_string(files[i].x));
 		return files;
 	}
 }
