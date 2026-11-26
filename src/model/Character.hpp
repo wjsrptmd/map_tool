@@ -33,6 +33,7 @@ struct MovementStep
 struct MovementDefinition
 {
     float speed = 0.f;
+    std::optional<float> wait;
     std::vector<MovementStep> route;
     std::optional<int> radius;
     bool loop = false;

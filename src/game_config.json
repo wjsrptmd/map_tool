@@ -5,6 +5,6 @@
   "startMap": { "chapter": 1, "x": 0, "y": 0 },
   "character": {
     "id": "00000001",
-    "moveInterval": 160
+    "speed": 8
   }
 }

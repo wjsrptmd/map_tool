@@ -94,8 +94,8 @@ MovementDefinition readMove(const nlohmann::json& move)
     for (const auto& item : move.items())
     {
         const auto& key = item.key();
-        const bool routeKey = key == "speed" || key == "route" || key == "loop";
-        const bool radiusKey = key == "speed" || key == "radius";
+        const bool routeKey = key == "speed" || key == "route" || key == "loop" || key == "wait";
+        const bool radiusKey = key == "speed" || key == "radius" || key == "wait";
         if ((hasRoute && !routeKey) || (hasRadius && !radiusKey))
             maptool::fail("move has unknown key " + key);
     }
@@ -106,6 +106,13 @@ MovementDefinition readMove(const nlohmann::json& move)
 
     MovementDefinition result;
     result.speed = speed;
+    if (move.contains("wait"))
+    {
+        if (!move["wait"].is_number()) maptool::fail("move.wait must be a non-negative number");
+        const float wait = move["wait"].get<float>();
+        if (wait < 0.f) maptool::fail("move.wait must be a non-negative number");
+        result.wait = wait;
+    }
     if (hasRadius)
     {
         if (!move["radius"].is_number_integer()) maptool::fail("move.radius must be an integer");

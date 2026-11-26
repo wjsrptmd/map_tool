@@ -21,6 +21,7 @@ public:
     void stopPlayer();
     void arrive(Cell cell);
     void advanceNpcs(float seconds);
+    bool slide(const std::string& instanceId, float& x, float& y, float& along) const;
     Cell playerCell() const;
     void validatePlacement(const std::string& text, const std::string& label, int chapter, Cell startMap, const std::string& characterId);
     bool standable(Cell cell, int ignoredInstance) const;
@@ -67,14 +68,18 @@ private:
     {
         Cell origin;
         Cell position;
+        Cell departed;
         float elapsed = 0.f;
+        float pause = 0.f;
         float walkRemaining = 0.f;
+        float walkDuration = 0.f;
         std::size_t routeIndex = 0;
         bool finished = false;
         std::string direction;
     };
 
     void validate(const std::map<int, PlacedChapter>& chapters, int chapter, Cell startMap, const std::string& characterId);
+    float standing(const MovementDefinition& definition);
     bool occupied(Cell cell, int ignoredInstance) const;
 
     MapManger& maps_;

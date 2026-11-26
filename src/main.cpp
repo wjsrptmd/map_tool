@@ -18,6 +18,13 @@ namespace
 		return object[key].get<int>();
 	}
 
+	float jsonFloat(const nlohmann::json& object, const char* key)
+	{
+		if (!object.contains(key) || !object[key].is_number())
+			maptool::fail(std::string(key) + " must be a positive number");
+		return object[key].get<float>();
+	}
+
 	std::string jsonText(const nlohmann::json& object, const char* key)
 	{
 		if (!object.contains(key) || !object[key].is_string() || object[key].get<std::string>().empty())
@@ -62,7 +69,7 @@ namespace
 		requireKeys(root, { "debugMode", "project", "viewShift", "startMap", "character" });
 		requireKeys(root["viewShift"], { "x", "y" });
 		requireKeys(root["startMap"], { "chapter", "x", "y" });
-		requireKeys(root["character"], { "id", "moveInterval" });
+		requireKeys(root["character"], { "id", "speed" });
 		maptool::GameSettings settings;
 		if (!root["debugMode"].is_boolean()) maptool::fail("debugMode must be a boolean");
 		settings.debugMode = root["debugMode"].get<bool>();
@@ -71,8 +78,8 @@ namespace
 		settings.chapter = jsonInt(root["startMap"], "chapter");
 		settings.startMap = { jsonInt(root["startMap"], "x"), jsonInt(root["startMap"], "y") };
 		settings.characterId = jsonText(root["character"], "id");
-		settings.moveInterval = jsonInt(root["character"], "moveInterval");
-		if (settings.moveInterval <= 0) maptool::fail("moveInterval must be positive");
+		settings.speed = jsonFloat(root["character"], "speed");
+		if (!(settings.speed > 0.f)) maptool::fail("speed must be a positive number");
 		return settings;
 	}
 }
@@ -88,7 +95,7 @@ int main(int argc, char** argv)
 			+ " chapter " + std::to_string(settings.chapter)
 			+ " map " + std::to_string(settings.startMap.x) + "," + std::to_string(settings.startMap.y)
 			+ " character " + settings.characterId
-			+ " moveInterval " + std::to_string(settings.moveInterval)
+			+ " speed " + std::to_string(settings.speed)
 			+ (settings.debugMode ? " debugMode on" : " debugMode off"));
 		maptool::Game game;
 		const bool selfTest = argc > 1 && std::string(argv[1]) == "--self-test";

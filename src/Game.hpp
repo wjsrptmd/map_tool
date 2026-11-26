@@ -17,7 +17,7 @@ struct GameSettings
     int chapter = 1;
     Cell startMap;
     std::string characterId;
-    int moveInterval = 0;
+    float speed = 0.f;
 };
 
 // Window, input, and drawing. Map data stays in MapManger.

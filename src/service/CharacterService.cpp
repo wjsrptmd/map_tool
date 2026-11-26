@@ -24,6 +24,9 @@ std::string directionName(Cell step)
     return "right";
 }
 
+constexpr float randomWaitMin = 0.5f;
+constexpr float randomWaitMax = 2.f;
+
 bool isDirection(const std::string& value)
 {
     return value == "up" || value == "down" || value == "left" || value == "right";
@@ -164,6 +167,7 @@ void CharacterService::enterMap()
                 state.origin = actor.position;
                 state.position = actor.position;
                 state.direction = actor.direction;
+                state.pause = standing(*definition);
                 motions_.emplace(actor.instanceId, state);
             }
             const Cell at = resume ? motions_.at(actor.instanceId).position : actor.position;
@@ -445,18 +449,21 @@ void CharacterService::advanceNpcs(float seconds)
         if (state.walkRemaining > 0.f)
         {
             state.walkRemaining -= seconds;
-            if (state.walkRemaining <= 0.f)
-            {
-                state.walkRemaining = 0.f;
-                characters_.at(actor.instance).idle(state.direction);
-            }
+            if (state.walkRemaining > 0.f) continue;
+            const float overshoot = -state.walkRemaining;
+            state.walkRemaining = 0.f;
+            characters_.at(actor.instance).idle(state.direction);
+            if (state.finished) continue;
+            state.pause = standing(definition);
+            state.elapsed = overshoot;
+            if (state.elapsed < state.pause) continue;
         }
-        if (state.finished) continue;
-        const float interval = 1.f / definition.speed;
-        state.elapsed += seconds;
-        if (state.elapsed < interval) continue;
-        state.elapsed -= interval;
-        if (state.elapsed >= interval) state.elapsed = 0.f;
+        else
+        {
+            if (state.finished) continue;
+            state.elapsed += seconds;
+            if (state.elapsed < state.pause) continue;
+        }
 
         Cell destination{};
         std::size_t routeIndex = state.routeIndex;
@@ -472,6 +479,8 @@ void CharacterService::advanceNpcs(float seconds)
                     + " because " + std::to_string(destination.x) + "," + std::to_string(destination.y)
                     + " is outside radius " + std::to_string(*definition.radius));
                 state.walkRemaining = 0.f;
+                state.pause = standing(definition);
+                state.elapsed = 0.f;
                 characters_.at(actor.instance).idle(state.direction);
                 continue;
             }
@@ -511,6 +520,8 @@ void CharacterService::advanceNpcs(float seconds)
                 + " and does not enter " + std::to_string(destination.x) + "," + std::to_string(destination.y)
                 + " because it is " + reason);
             state.walkRemaining = 0.f;
+            state.pause = standing(definition);
+            state.elapsed = 0.f;
             characters_.at(actor.instance).idle(state.direction);
             continue;
         }
@@ -524,7 +535,7 @@ void CharacterService::advanceNpcs(float seconds)
         pending.instanceId = actor.instanceId;
         pending.destination = destination;
         pending.direction = facing;
-        pending.cycle = static_cast<float>(animation.frames) / animation.fps;
+        pending.cycle = 1.f / definition.speed;
         pending.routeIndex = routeIndex;
         pending.followRoute = followRoute;
         steps.push_back(std::move(pending));
@@ -536,14 +547,37 @@ void CharacterService::advanceNpcs(float seconds)
         Log::info("npc " + step.instanceId + " moved to " + std::to_string(step.destination.x) + "," + std::to_string(step.destination.y)
             + " facing " + step.direction + (step.followRoute ? " route " + std::to_string(step.routeIndex) : " random"));
         auto& state = motions_.at(step.instanceId);
+        state.departed = state.position;
         state.position = step.destination;
         state.direction = step.direction;
+        state.walkDuration = step.cycle;
         state.walkRemaining = step.cycle;
+        state.elapsed = 0.f;
         if (!step.followRoute) continue;
         state.routeIndex = step.routeIndex;
         const MovementDefinition& definition = *characters_.movement(characters_.actor(step.instance).body.id);
         if (!definition.loop && step.routeIndex + 1 == definition.route.size()) state.finished = true;
     }
+}
+
+float CharacterService::standing(const MovementDefinition& definition)
+{
+    if (definition.wait) return *definition.wait;
+    return std::uniform_real_distribution<float>(randomWaitMin, randomWaitMax)(random_);
+}
+
+bool CharacterService::slide(const std::string& instanceId, float& x, float& y, float& along) const
+{
+    const auto found = motions_.find(instanceId);
+    if (found == motions_.end()) return false;
+    const auto& state = found->second;
+    if (!(state.walkRemaining > 0.f) || !(state.walkDuration > 0.f)) return false;
+    along = 1.f - state.walkRemaining / state.walkDuration;
+    if (along < 0.f) along = 0.f;
+    if (along > 1.f) along = 1.f;
+    x = state.departed.x + (state.position.x - state.departed.x) * along;
+    y = state.departed.y + (state.position.y - state.departed.y) * along;
+    return true;
 }
 
 bool CharacterService::npcCourse(const std::string& instanceId, NpcCourse& course) const
