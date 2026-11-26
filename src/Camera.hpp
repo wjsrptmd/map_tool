@@ -8,5 +8,6 @@ class Camera
 {
 public:
     Cell focus(const MapManger& maps, Cell character) const;
+    Vec2 viewOrigin(const MapManger& maps, float x, float y) const;
 };
 }

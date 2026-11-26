@@ -196,9 +196,14 @@ void CharacterService::enterMap()
         + " npcs " + std::to_string(spawned));
 }
 
-void CharacterService::movePlayer(Cell step)
+void CharacterService::setPlayerSpeed(float tilesPerSecond)
 {
-    if (step == Cell{} || maps_.loading()) return;
+    speed_ = tilesPerSecond > 0.f ? tilesPerSecond : 0.f;
+}
+
+bool CharacterService::beginPlayerStep(Cell step)
+{
+    if (step == Cell{} || maps_.loading() || player_ < 0 || glide_.active) return false;
     const Cell before = playerCell();
     const Cell next = before + step;
     const auto facing = directionName(step);
@@ -210,17 +215,92 @@ void CharacterService::movePlayer(Cell step)
         maps_.beginNeighbor(next);
     const bool moved = playerCell() != before;
     auto& body = characters_.at(player_);
-    if (moved)
+    if (!moved)
     {
-        body.walk(facing);
-        const Cell arrived = playerCell();
-        Log::info("player moved to " + std::to_string(arrived.x) + "," + std::to_string(arrived.y) + " facing " + facing);
+        body.idle(facing);
+        return false;
     }
-    else body.idle(facing);
+    body.walk(facing);
+    if (speed_ > 0.f)
+    {
+        glide_.from = before;
+        glide_.to = playerCell();
+        glide_.elapsed = 0.f;
+        glide_.duration = 1.f / speed_;
+        glide_.active = true;
+    }
+    const Cell arrived = playerCell();
+    Log::info("player moved to " + std::to_string(arrived.x) + "," + std::to_string(arrived.y) + " facing " + facing);
+    return true;
+}
+
+void CharacterService::movePlayer(Cell step)
+{
+    beginPlayerStep(step);
+}
+
+void CharacterService::advancePlayer(float seconds, Cell desired)
+{
+    if (maps_.loading() || player_ < 0 || !(seconds >= 0.f)) return;
+    if (glide_.active)
+    {
+        const Cell glideStep = glide_.to - glide_.from;
+        if (desired != Cell{})
+        {
+            if (desired == glideStep) pendingSet_ = false;
+            else
+            {
+                pending_ = desired;
+                pendingSet_ = true;
+            }
+        }
+        glide_.elapsed += seconds;
+        if (glide_.elapsed < glide_.duration) return;
+        glide_.active = false;
+        Cell next{};
+        if (pendingSet_)
+        {
+            next = pending_;
+            pendingSet_ = false;
+        }
+        else if (desired != Cell{}) next = desired;
+        if (next == Cell{})
+        {
+            auto& body = characters_.at(player_);
+            body.idle(body.direction);
+            return;
+        }
+        beginPlayerStep(next);
+        return;
+    }
+    if (desired == Cell{})
+    {
+        rejectedSet_ = false;
+        return;
+    }
+    if (rejectedSet_ && desired == rejected_) return;
+    rejectedSet_ = false;
+    if (!beginPlayerStep(desired))
+    {
+        rejected_ = desired;
+        rejectedSet_ = true;
+        return;
+    }
+    if (!glide_.active) return;
+    glide_.elapsed = seconds < glide_.duration ? seconds : glide_.duration;
+    if (!(glide_.elapsed < glide_.duration)) glide_.active = false;
+}
+
+void CharacterService::clearPlayerInput()
+{
+    pendingSet_ = false;
+    rejectedSet_ = false;
 }
 
 void CharacterService::stopPlayer()
 {
+    glide_.active = false;
+    clearPlayerInput();
     auto& body = characters_.at(player_);
     body.idle(body.direction);
     Log::info("player stopped facing " + body.direction);
@@ -228,6 +308,8 @@ void CharacterService::stopPlayer()
 
 void CharacterService::arrive(Cell cell)
 {
+    glide_.active = false;
+    clearPlayerInput();
     Log::info("player arrives at " + std::to_string(cell.x) + "," + std::to_string(cell.y)
         + " on map " + std::to_string(maps_.currentMapX()) + "," + std::to_string(maps_.currentMapY()));
     characters_.move(player_, cell.x, cell.y);
@@ -564,6 +646,21 @@ float CharacterService::standing(const MovementDefinition& definition)
 {
     if (definition.wait) return *definition.wait;
     return std::uniform_real_distribution<float>(randomWaitMin, randomWaitMax)(random_);
+}
+
+bool CharacterService::slide(int instance, float& x, float& y, float& along) const
+{
+    if (instance == player_ && glide_.active && glide_.duration > 0.f)
+    {
+        along = glide_.elapsed / glide_.duration;
+        if (along < 0.f) along = 0.f;
+        if (along > 1.f) along = 1.f;
+        x = static_cast<float>(glide_.from.x) + static_cast<float>(glide_.to.x - glide_.from.x) * along;
+        y = static_cast<float>(glide_.from.y) + static_cast<float>(glide_.to.y - glide_.from.y) * along;
+        return true;
+    }
+    if (instance < 0) return false;
+    return slide(characters_.actor(instance).instanceId, x, y, along);
 }
 
 bool CharacterService::slide(const std::string& instanceId, float& x, float& y, float& along) const

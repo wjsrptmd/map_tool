@@ -43,10 +43,10 @@ private:
     void drawTile(sf::RenderTarget& out, const sf::Texture* texture, sf::Vector2f position) const;
     void drawGame(sf::RenderTarget& out);
     void drawLoading(sf::RenderTarget& out) const;
-    void moveCharacter(Cell step);
     void openChapter(const GameSettings& settings);
     bool checkPlacements(const GameSettings& settings);
     bool checkNpcMovement();
+    bool checkPlayerGlide(int actorId, Cell start);
     bool selfTest(const GameSettings& settings);
     int play(const GameSettings& settings);
 

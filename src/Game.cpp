@@ -1,5 +1,6 @@
 #include "Game.hpp"
 #include <array>
+#include <cmath>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -76,15 +77,44 @@ namespace maptool
 	void Game::drawGame(sf::RenderTarget& out)
 	{
 		const auto& config = maps_.config();
-		const auto& view = maps_.view();
+		const float tile = config.tileSize;
 		const sf::Vector2f margin{ config.margin.x, config.margin.y };
-		for (int y = 0; y < maps_.viewRows(); ++y)
-			for (int x = 0; x < maps_.viewColumns(); ++x)
+		float focusX = static_cast<float>(maps_.view().origin.x + maps_.viewColumns() / 2);
+		float focusY = static_cast<float>(maps_.view().origin.y + maps_.viewRows() / 2);
+		for (const auto& actor : characters_.actors())
+		{
+			if (!actor.player) continue;
+			focusX = static_cast<float>(actor.x);
+			focusY = static_cast<float>(actor.y);
+			float along = 0.f;
+			service_.slide(actor.instance, focusX, focusY, along);
+			break;
+		}
+		const Vec2 origin = camera_.viewOrigin(maps_, focusX, focusY);
+		const int camX = static_cast<int>(std::lround(origin.x * tile));
+		const int camY = static_cast<int>(std::lround(origin.y * tile));
+		const int x0 = static_cast<int>(std::floor(origin.x)) - 1;
+		const int y0 = static_cast<int>(std::floor(origin.y)) - 1;
+		sf::View view = out.getView();
+		const sf::FloatRect previousScissor = view.getScissor();
+		const sf::Vector2f target(out.getSize());
+		if (target.x > 0.f && target.y > 0.f)
+		{
+			const float viewW = static_cast<float>(maps_.viewColumns()) * tile;
+			const float viewH = static_cast<float>(maps_.viewRows()) * tile;
+			view.setScissor(sf::FloatRect({ margin.x / target.x, margin.y / target.y }, { viewW / target.x, viewH / target.y }));
+			out.setView(view);
+		}
+		for (int row = 0; row < maps_.viewRows() + 2; ++row)
+			for (int col = 0; col < maps_.viewColumns() + 2; ++col)
 			{
-				const auto& id = view.tiles[static_cast<std::size_t>(y)][static_cast<std::size_t>(x)];
-				const auto position = margin + sf::Vector2f{ x * config.tileSize, y * config.tileSize };
-				drawTile(out, pictures_.get(maps_, id), position);
+				const int mapX = x0 + col;
+				const int mapY = y0 + row;
+				const sf::Vector2f position{ margin.x + mapX * tile - static_cast<float>(camX), margin.y + mapY * tile - static_cast<float>(camY) };
+				drawTile(out, pictures_.get(maps_, maps_.tileAt(mapX, mapY)), position);
 			}
+		view.setScissor(previousScissor);
+		out.setView(view);
 		const auto& sheet = characters_.config();
 		for (const auto& actor : characters_.actors())
 		{
@@ -95,18 +125,19 @@ namespace maptool
 			float tileX = static_cast<float>(actor.x);
 			float tileY = static_cast<float>(actor.y);
 			float along = 0.f;
+			const bool sliding = service_.slide(actor.instance, tileX, tileY, along);
 			int frame = body.frame();
-			if (service_.slide(actor.instanceId, tileX, tileY, along) && animation.frames > 0)
+			if (sliding && !actor.player && animation.frames > 0)
 			{
 				frame = static_cast<int>(along * animation.frames);
 				if (frame >= animation.frames) frame = animation.frames - 1;
 				if (frame < 0) frame = 0;
 			}
-			const float localX = tileX - view.origin.x;
-			const float localY = tileY - view.origin.y;
+			const float screenX = std::round(margin.x + (tileX + .5f) * tile - static_cast<float>(camX));
+			const float screenY = std::round(margin.y + (tileY + .5f) * tile - static_cast<float>(camY));
 			sf::Sprite sprite(spriteTexture(animation), sf::IntRect({ frame * sheet.frameWidth, 0 }, { sheet.frameWidth, sheet.frameHeight }));
 			sprite.setOrigin({ body.anchor.x, body.anchor.y });
-			sprite.setPosition(margin + sf::Vector2f{ (localX + .5f) * config.tileSize, (localY + .5f) * config.tileSize });
+			sprite.setPosition({ screenX, screenY });
 			out.draw(sprite);
 		}
 	}
@@ -119,14 +150,6 @@ namespace maptool
 		bar.setPosition(size * 0.5f);
 		bar.setFillColor({ 232, 216, 176 });
 		out.draw(bar);
-	}
-
-	void Game::moveCharacter(Cell step)
-	{
-		const auto before = service_.playerCell();
-		service_.movePlayer(step);
-		if (service_.playerCell() != before)
-			maps_.follow(camera_.focus(maps_, service_.playerCell()));
 	}
 
 	void Game::openChapter(const GameSettings& settings)
@@ -607,15 +630,139 @@ namespace maptool
 		if (!blocked) return false;
 		characters_.move(actorId, start.x, start.y);
 		characters_.at(actorId).idle(definition.defaultDirection);
+		if (!checkPlayerGlide(actorId, start)) return false;
 
 		return maps_.currentChapter() == settings.chapter
 			&& maps_.currentMapX() == settings.startMap.x
 			&& maps_.currentMapY() == settings.startMap.y;
 	}
 
+	bool Game::checkPlayerGlide(int actorId, Cell start)
+	{
+		const Cell steps[] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+		const char* names[] = { "up", "down", "left", "right" };
+		int forward = -1;
+		for (int i = 0; i < 4; ++i)
+		{
+			if (service_.standable(start + steps[i], actorId) && service_.standable(start + steps[i] + steps[i], actorId))
+			{
+				forward = i;
+				break;
+			}
+		}
+		if (forward < 0) return false;
+		const Cell step = steps[forward];
+		const float tileTime = 0.25f;
+		auto restore = [&]()
+		{
+			service_.setPlayerSpeed(0.f);
+			service_.stopPlayer();
+			characters_.move(actorId, start.x, start.y);
+			service_.setPlayerSpeed(4.f);
+		};
+		service_.setPlayerSpeed(4.f);
+		float seenX = 0.f;
+		float seenY = 0.f;
+		float along = 1.f;
+
+		service_.advancePlayer(0.f, step);
+		if (service_.playerCell() != start + step) return false;
+		if (!service_.slide(actorId, seenX, seenY, along) || along > 0.001f) return false;
+		if (std::abs(seenX - static_cast<float>(start.x)) > 0.001f || std::abs(seenY - static_cast<float>(start.y)) > 0.001f) return false;
+		service_.advancePlayer(tileTime * 0.5f, {});
+		if (service_.playerCell() != start + step || characters_.at(actorId).frame() != 0) return false;
+		if (!service_.slide(actorId, seenX, seenY, along) || std::abs(along - 0.5f) > 0.02f) return false;
+		if (std::abs(seenX - (static_cast<float>(start.x) + step.x * 0.5f)) > 0.02f) return false;
+		if (std::abs(seenY - (static_cast<float>(start.y) + step.y * 0.5f)) > 0.02f) return false;
+		service_.advancePlayer(tileTime * 0.5f, {});
+		if (service_.slide(actorId, seenX, seenY, along)) return false;
+		if (service_.playerCell() != start + step) return false;
+		if (characters_.at(actorId).state != "idle" || characters_.at(actorId).direction != names[forward]) return false;
+		restore();
+		if (service_.playerCell() != start) return false;
+
+		service_.advancePlayer(0.f, step);
+		service_.advancePlayer(0.24f, {});
+		if (!service_.slide(actorId, seenX, seenY, along) || along < 0.9f || along > 0.99f) return false;
+		service_.advancePlayer(0.02f, {});
+		if (service_.slide(actorId, seenX, seenY, along)) return false;
+		if (service_.playerCell() != start + step || characters_.at(actorId).state != "idle") return false;
+		restore();
+
+		service_.advancePlayer(1.f, step);
+		if (service_.playerCell() != start + step || service_.slide(actorId, seenX, seenY, along)) return false;
+		restore();
+
+		int turn = -1;
+		for (int i = 0; i < 4; ++i)
+		{
+			if (i == forward) continue;
+			if (service_.standable(start + step + steps[i], actorId))
+			{
+				turn = i;
+				break;
+			}
+		}
+		if (turn < 0) return false;
+		service_.advancePlayer(0.f, step);
+		service_.advancePlayer(0.05f, steps[turn]);
+		service_.advancePlayer(tileTime, {});
+		if (service_.playerCell() != start + step + steps[turn]) return false;
+		if (!service_.slide(actorId, seenX, seenY, along) || along > 0.001f) return false;
+		if (characters_.at(actorId).state != "walk" || characters_.at(actorId).direction != names[turn]) return false;
+		restore();
+
+		service_.advancePlayer(0.f, step);
+		characters_.advance(0.2f);
+		const float elapsed = characters_.at(actorId).elapsed;
+		if (characters_.at(actorId).state != "walk" || elapsed != 0.2f) return false;
+		service_.advancePlayer(tileTime, step);
+		if (characters_.at(actorId).state != "walk" || characters_.at(actorId).elapsed != elapsed) return false;
+		if (service_.playerCell() != start + step + step) return false;
+		if (!service_.slide(actorId, seenX, seenY, along) || along > 0.001f) return false;
+		restore();
+
+		bool blocked = false;
+		const auto& map = maps_.current();
+		for (int y = 0; y < map.height && !blocked; ++y)
+			for (int x = 0; x < map.width && !blocked; ++x)
+				for (int i = 0; i < 4; ++i)
+				{
+					const Cell next{ x + steps[i].x, y + steps[i].y };
+					const bool inside = next.x >= 0 && next.y >= 0 && next.x < map.width && next.y < map.height;
+					if (!inside || maps_.walkable(next)) continue;
+					characters_.move(actorId, x, y);
+					service_.advancePlayer(0.f, steps[i]);
+					const auto& body = characters_.at(actorId);
+					if (body.state != "idle" || body.direction != names[i] || service_.playerCell() != Cell{ x, y }) return false;
+					if (service_.slide(actorId, seenX, seenY, along)) return false;
+					blocked = true;
+					break;
+				}
+		if (!blocked) return false;
+
+		const Vec2 still = camera_.viewOrigin(maps_, 20.f, 12.f);
+		const Cell snapped = camera_.focus(maps_, { 20, 12 });
+		if (std::abs(still.x - static_cast<float>(snapped.x - maps_.viewColumns() / 2)) > 0.001f) return false;
+		if (std::abs(still.y - static_cast<float>(snapped.y - maps_.viewRows() / 2)) > 0.001f) return false;
+		const Vec2 half = camera_.viewOrigin(maps_, 20.5f, 12.f);
+		if (std::abs((half.x - still.x) - 0.5f) > 0.01f) return false;
+		const Vec2 low = camera_.viewOrigin(maps_, -5.f, -5.f);
+		const Vec2 high = camera_.viewOrigin(maps_, 1000.f, 1000.f);
+		if (low.x < -0.001f || low.y < -0.001f) return false;
+		if (high.x > map.width - maps_.viewColumns() + 0.001f || high.y > map.height - maps_.viewRows() + 0.001f) return false;
+
+		service_.setPlayerSpeed(0.f);
+		service_.stopPlayer();
+		characters_.move(actorId, start.x, start.y);
+		characters_.at(actorId).idle(characters_.at(actorId).defaultDirection);
+		return service_.playerCell() == start;
+	}
+
 	int Game::play(const GameSettings& settings)
 	{
 		openChapter(settings);
+		service_.setPlayerSpeed(settings.speed);
 		maps_.follow(camera_.focus(maps_, service_.playerCell()));
 		const auto& config = maps_.config();
 		const auto width = static_cast<unsigned>(maps_.viewColumns() * config.tileSize + config.margin.x * 2);
@@ -628,9 +775,7 @@ namespace maptool
 			sf::Keyboard::Key::Up, sf::Keyboard::Key::Down, sf::Keyboard::Key::Left, sf::Keyboard::Key::Right };
 		std::array<bool, 4> held{};
 		int moving = -1;
-		sf::Clock repeat;
 		sf::Clock animation;
-		const sf::Time repeatInterval = sf::seconds(1.f / settings.speed);
 		while (window.isOpen())
 		{
 			while (const auto event = window.pollEvent())
@@ -645,7 +790,7 @@ namespace maptool
 					Log::info("focus lost");
 					held.fill(false);
 					moving = -1;
-					service_.stopPlayer();
+					service_.clearPlayerInput();
 				}
 				else if (const auto* key = event->getIf<sf::Event::KeyPressed>())
 				{
@@ -654,8 +799,6 @@ namespace maptool
 						if (key->code != directions[i] || held[static_cast<std::size_t>(i)]) continue;
 						held[static_cast<std::size_t>(i)] = true;
 						moving = i;
-						moveCharacter(directionStep(key->code));
-						repeat.restart();
 					}
 				}
 				else if (const auto* key = event->getIf<sf::Event::KeyReleased>())
@@ -667,8 +810,6 @@ namespace maptool
 						moving = -1;
 						for (int i = 0; i < 4; ++i)
 							if (held[static_cast<std::size_t>(i)]) moving = i;
-						if (moving < 0) service_.stopPlayer();
-						repeat.restart();
 					}
 				}
 			}
@@ -677,7 +818,6 @@ namespace maptool
 				Log::info("neighbor landing " + std::to_string(arrived->x) + "," + std::to_string(arrived->y));
 				service_.arrive(*arrived);
 				maps_.follow(camera_.focus(maps_, service_.playerCell()));
-				repeat.restart();
 			}
 			window.clear(toSf(config.background));
 			if (maps_.loading())
@@ -687,12 +827,10 @@ namespace maptool
 			}
 			else
 			{
-				if (moving >= 0 && repeat.getElapsedTime() >= repeatInterval)
-				{
-					moveCharacter(directionStep(directions[moving]));
-					repeat.restart();
-				}
-				const float deltaSeconds = animation.restart().asSeconds();
+				float deltaSeconds = animation.restart().asSeconds();
+				if (deltaSeconds > 0.05f) deltaSeconds = 0.05f;
+				const Cell desired = moving >= 0 ? directionStep(directions[moving]) : Cell{};
+				service_.advancePlayer(deltaSeconds, desired);
 				service_.advanceNpcs(deltaSeconds);
 				characters_.advance(deltaSeconds);
 				drawGame(window);

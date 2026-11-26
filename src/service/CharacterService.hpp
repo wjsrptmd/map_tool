@@ -17,10 +17,14 @@ public:
 
     void placePlayer(const std::string& characterId, int chapter, Cell startMap);
     void enterMap();
+    void setPlayerSpeed(float tilesPerSecond);
     void movePlayer(Cell step);
+    void advancePlayer(float seconds, Cell desired);
+    void clearPlayerInput();
     void stopPlayer();
     void arrive(Cell cell);
     void advanceNpcs(float seconds);
+    bool slide(int instance, float& x, float& y, float& along) const;
     bool slide(const std::string& instanceId, float& x, float& y, float& along) const;
     Cell playerCell() const;
     void validatePlacement(const std::string& text, const std::string& label, int chapter, Cell startMap, const std::string& characterId);
@@ -81,11 +85,27 @@ private:
     void validate(const std::map<int, PlacedChapter>& chapters, int chapter, Cell startMap, const std::string& characterId);
     float standing(const MovementDefinition& definition);
     bool occupied(Cell cell, int ignoredInstance) const;
+    bool beginPlayerStep(Cell step);
+
+    struct PlayerGlide
+    {
+        Cell from;
+        Cell to;
+        float elapsed = 0.f;
+        float duration = 0.f;
+        bool active = false;
+    };
 
     MapManger& maps_;
     CharacterManager& characters_;
     std::map<int, PlacedChapter> chapters_;
     std::map<std::string, NpcMovementState> motions_;
+    PlayerGlide glide_;
+    Cell pending_{};
+    Cell rejected_{};
+    bool pendingSet_ = false;
+    bool rejectedSet_ = false;
+    float speed_ = 0.f;
     std::mt19937 random_;
     int player_ = -1;
 };
